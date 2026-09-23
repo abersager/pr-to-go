@@ -190,8 +190,6 @@ fn pull_request_details(w: &mut World, viewer: &str, vars: &Value) -> GqlResult 
     let mb = r.merge_base(base_tip, &pr.head_oid).expect("merge base");
     let files = r.diff(&mb, &pr.head_oid, limit);
     let rollup = rollup(w, r, &pr.head_oid);
-    let gitattributes =
-        r.file_text(&pr.head_oid, ".gitattributes").map(|text| json!({ "object": { "text": text } }));
     let latest: std::collections::BTreeMap<&str, &str> = pr
         .reviews
         .iter()
@@ -236,7 +234,7 @@ fn pull_request_details(w: &mut World, viewer: &str, vars: &Value) -> GqlResult 
             "createdAt": pr.created_at,
             "updatedAt": pr.updated_at,
             "lastCommit": { "nodes": [ { "commit": {
-                "oid": pr.head_oid, "statusCheckRollup": rollup, "gitattributes": gitattributes,
+                "oid": pr.head_oid, "statusCheckRollup": rollup,
             } } ] },
         }
     }}))

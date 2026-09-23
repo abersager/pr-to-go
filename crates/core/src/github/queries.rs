@@ -128,20 +128,6 @@ pub struct CommitNodeWithChecks {
 pub struct CommitWithChecks {
     pub oid: String,
     pub status_check_rollup: Option<Rollup>,
-    /// Only asked for by PullRequestDetails.
-    #[serde(default)]
-    pub gitattributes: Option<TreeEntry>,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct TreeEntry {
-    pub object: Option<BlobText>,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct BlobText {
-    #[serde(default)]
-    pub text: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]

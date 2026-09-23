@@ -39,14 +39,6 @@ query PullRequestDetails($owner: String!, $name: String!, $number: Int!) {
         nodes {
           commit {
             oid
-            # For collapsing generated files (linguist-generated).
-            gitattributes: file(path: ".gitattributes") {
-              object {
-                ... on Blob {
-                  text
-                }
-              }
-            }
             statusCheckRollup {
               state
               contexts(first: 100) {

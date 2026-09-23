@@ -110,10 +110,13 @@ struct NewRevision {
     files: Vec<FileRow>,
     commits: Vec<CommitInfo>,
     partial: Vec<PartialReason>,
+    /// The head's root `.gitattributes`, if it has one.
+    gitattributes: Option<String>,
 }
 
 enum FilesResult {
-    Done(Vec<FileRow>, Vec<PartialReason>),
+    /// Files, why the revision is partial, and the root `.gitattributes`.
+    Done(Vec<FileRow>, Vec<PartialReason>, Option<String>),
     /// The PR's head moved while we were fetching; start over.
     HeadMoved,
 }
@@ -236,7 +239,9 @@ async fn sync_once(ctx: &SyncCtx, r: &PrRef) -> Result<Option<SyncOutcome>> {
     let new_rev = match revision {
         None => None,
         Some((FilesResult::HeadMoved, _)) => return Ok(None),
-        Some((FilesResult::Done(files, partial), commits)) => Some(NewRevision { files, commits, partial }),
+        Some((FilesResult::Done(files, partial, gitattributes), commits)) => {
+            Some(NewRevision { files, commits, partial, gitattributes })
+        }
     };
 
     // 7. Images in all rendered HTML.
@@ -273,10 +278,9 @@ async fn sync_once(ctx: &SyncCtx, r: &PrRef) -> Result<Option<SyncOutcome>> {
             }
             (None, None) => unreachable!(),
         };
-        let gitattributes = pr.last_commit.nodes.first().and_then(|n| {
-            n.commit.gitattributes.as_ref().and_then(|t| t.object.as_ref()).and_then(|o| o.text.clone())
-        });
-        tx.execute("UPDATE pr_revision SET gitattributes = ?2 WHERE id = ?1", params![rev_id, gitattributes])?;
+        if let Some(nr) = &new_rev {
+            tx.execute("UPDATE pr_revision SET gitattributes = ?2 WHERE id = ?1", params![rev_id, nr.gitattributes])?;
+        }
         tx.execute(
             "INSERT INTO check_snapshot (revision_id, captured_at, rollup_state, contexts) VALUES (?1, ?2, ?3, ?4)
              ON CONFLICT (revision_id) DO UPDATE SET captured_at = excluded.captured_at,
@@ -590,7 +594,8 @@ fn is_image_path(path: &str) -> bool {
 }
 
 struct BlobNeed {
-    file: usize,
+    /// Index into the files; `None` for the root `.gitattributes`.
+    file: Option<usize>,
     is_head: bool,
     expr: String,
     path: String,
@@ -623,7 +628,16 @@ async fn fetch_files(
     };
 
     let mut files = Vec::with_capacity(rest.len());
-    let mut needs = Vec::new();
+    // The root .gitattributes rides along in the first batch, for finding
+    // generated files. (`object(expression:)` is null for a missing file,
+    // where `Commit.file(path:)` would add a NOT_FOUND error.)
+    let mut needs = vec![BlobNeed {
+        file: None,
+        is_head: true,
+        expr: format!("{head}:.gitattributes"),
+        path: ".gitattributes".into(),
+    }];
+    let mut gitattributes = None;
     for (i, f) in rest.iter().enumerate() {
         let base_path = f.previous_filename.clone().unwrap_or_else(|| f.filename.clone());
         let has_base = f.status != "added";
@@ -644,7 +658,7 @@ async fn fetch_files(
             match &f.sha {
                 Some(sha) if ctx.blobs.has(sha)? => row.head_blob_oid = Some(sha.clone()),
                 _ => needs.push(BlobNeed {
-                    file: i,
+                    file: Some(i),
                     is_head: true,
                     expr: format!("{head}:{}", f.filename),
                     path: f.filename.clone(),
@@ -655,7 +669,7 @@ async fn fetch_files(
             match known_base.get(&base_path) {
                 Some(oid) if ctx.blobs.has(oid)? => row.base_blob_oid = Some(oid.clone()),
                 _ => needs.push(BlobNeed {
-                    file: i,
+                    file: Some(i),
                     is_head: false,
                     expr: format!("{merge_base}:{base_path}"),
                     path: base_path,
@@ -680,7 +694,11 @@ async fn fetch_files(
         for (i, need) in chunk.iter().enumerate() {
             let info: Option<BlobInfo> = serde_json::from_value(data["repository"][format!("b{i}")].clone())
                 .map_err(|e| GhError::Protocol(format!("Blobs: {e}")))?;
-            let row = &mut files[need.file];
+            let Some(file) = need.file else {
+                gitattributes = info.filter(|b| !b.is_truncated).and_then(|b| b.text);
+                continue;
+            };
+            let row = &mut files[file];
             let Some(info) = info else {
                 row.content_status = "missing";
                 partial.push(PartialReason {
@@ -689,13 +707,13 @@ async fn fetch_files(
                 });
                 continue;
             };
-            if need.is_head && rest[need.file].sha.as_deref().is_some_and(|s| s != info.oid) {
+            if need.is_head && rest[file].sha.as_deref().is_some_and(|s| s != info.oid) {
                 // The files list is from a different head than `head`.
                 return Ok(FilesResult::HeadMoved);
             }
             let is_binary = info.is_binary.unwrap_or(false);
             if is_binary {
-                binary.insert(need.file);
+                binary.insert(file);
             }
             if need.is_head {
                 row.head_blob_oid = Some(info.oid.clone());
@@ -764,7 +782,7 @@ async fn fetch_files(
             };
         }
     }
-    Ok(FilesResult::Done(files, partial))
+    Ok(FilesResult::Done(files, partial, gitattributes))
 }
 
 async fn fetch_blob_batch(gh: &GitHub, r: &PrRef, chunk: &[BlobNeed]) -> Result<serde_json::Value> {
