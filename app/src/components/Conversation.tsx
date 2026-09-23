@@ -1,6 +1,7 @@
-import type { PrDetail } from "../types";
+import type { Draft, PrDetail } from "../types";
 import { ago, short } from "../util/format";
 import { Html, openExternal } from "./Html";
+import { ReplyArea } from "./ReplyArea";
 import { ThreadView } from "./Thread";
 
 const REVIEW_LABEL: Record<string, string> = {
@@ -11,7 +12,21 @@ const REVIEW_LABEL: Record<string, string> = {
   PENDING: "has a pending review",
 };
 
-export function Conversation({ pr }: { pr: PrDetail }) {
+export function Conversation({
+  pr,
+  draft,
+  editable,
+  onDraft,
+  onNotEditable,
+  onOpenReview,
+}: {
+  pr: PrDetail;
+  draft: Draft | null;
+  editable: boolean;
+  onDraft: (d: Draft | null) => void;
+  onNotEditable: () => void;
+  onOpenReview: () => void;
+}) {
   type Item =
     | { kind: "review"; at: string; key: string; el: React.ReactNode }
     | { kind: "comment"; at: string; key: string; el: React.ReactNode };
@@ -105,6 +120,19 @@ export function Conversation({ pr }: { pr: PrDetail }) {
 
       <section className="timeline">
         <h3>Activity</h3>
+        {draft && (
+          <div className="timeline-item draft-review-card" onClick={onOpenReview}>
+            <div className="small">
+              <span className="badge pending">Your review</span>{" "}
+              <span className="muted">
+                {draft.status === "draft" ? "draft" : draft.status.replace("_", " ")} ·{" "}
+                {draft.comments.length} {draft.comments.length === 1 ? "comment" : "comments"}
+                {draft.verdict && draft.verdict !== "COMMENT" && ` · ${draft.verdict === "APPROVE" ? "approve" : "request changes"}`}
+              </span>
+            </div>
+            {draft.bodyMd.trim() && <div className="small draft-snippet">{draft.bodyMd.split("\n")[0]}</div>}
+          </div>
+        )}
         {items.length === 0 && <p className="muted">No reviews or comments yet.</p>}
         {items.map((i) => (
           <div key={i.key}>{i.el}</div>
@@ -120,7 +148,23 @@ export function Conversation({ pr }: { pr: PrDetail }) {
                 <code>{t.path}</code>
                 {t.subjectType === "LINE" && `:${t.line ?? t.originalLine}`}
               </div>
-              <ThreadView thread={t} showContext />
+              <ThreadView
+                thread={t}
+                showContext
+                footer={
+                  pr.revision && (
+                    <ReplyArea
+                      prId={pr.id}
+                      revisionId={pr.revision.id}
+                      thread={t}
+                      draft={draft}
+                      editable={editable}
+                      onDraft={onDraft}
+                      onNotEditable={onNotEditable}
+                    />
+                  )
+                }
+              />
             </div>
           ))}
         </section>

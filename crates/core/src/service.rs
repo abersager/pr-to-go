@@ -92,6 +92,7 @@ pub struct Core {
     pub(crate) secrets: Arc<dyn SecretStore>,
     pub(crate) events: broadcast::Sender<Event>,
     pub(crate) data_dir: PathBuf,
+    pub(crate) outbox_wake: Arc<tokio::sync::Notify>,
     online: Mutex<Option<bool>>,
     syncing: Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
 }
@@ -113,6 +114,7 @@ impl Core {
             secrets: opts.secrets,
             events,
             data_dir: opts.data_dir,
+            outbox_wake: Arc::new(tokio::sync::Notify::new()),
             online: Mutex::new(None),
             syncing: Mutex::new(HashMap::new()),
         }))

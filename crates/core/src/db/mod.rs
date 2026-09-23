@@ -16,6 +16,30 @@ use rusqlite_migration::{M, Migrations};
 
 use crate::error::{Error, Result};
 
+thread_local! {
+    static IN_READ: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    static IN_WRITE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// The connection mutexes aren't reentrant: calling `read` inside `read` (or
+/// `write` inside `write`) on one thread would deadlock. Fail loudly instead.
+struct NestGuard(&'static std::thread::LocalKey<std::cell::Cell<bool>>);
+
+impl NestGuard {
+    fn enter(key: &'static std::thread::LocalKey<std::cell::Cell<bool>>, what: &str) -> NestGuard {
+        if key.with(|k| k.replace(true)) {
+            panic!("{what} called while this thread is already inside {what}; this would deadlock");
+        }
+        NestGuard(key)
+    }
+}
+
+impl Drop for NestGuard {
+    fn drop(&mut self) {
+        self.0.with(|k| k.set(false));
+    }
+}
+
 pub struct Db {
     writer: Mutex<Connection>,
     reader: Mutex<Connection>,
@@ -55,6 +79,7 @@ impl Db {
     /// Runs `f` in an IMMEDIATE transaction on the writer connection and
     /// commits if it returns `Ok`.
     pub fn write<T>(&self, f: impl FnOnce(&Transaction) -> Result<T>) -> Result<T> {
+        let _nest = NestGuard::enter(&IN_WRITE, "Db::write");
         let mut conn = self.writer.lock().expect("db writer lock poisoned");
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let out = f(&tx)?;
@@ -64,6 +89,7 @@ impl Db {
 
     /// Runs `f` on the read-only connection. Sees the latest committed state.
     pub fn read<T>(&self, f: impl FnOnce(&Connection) -> Result<T>) -> Result<T> {
+        let _nest = NestGuard::enter(&IN_READ, "Db::read");
         let conn = self.reader.lock().expect("db reader lock poisoned");
         f(&conn)
     }

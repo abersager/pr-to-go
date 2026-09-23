@@ -128,3 +128,32 @@ describe("split rows", () => {
     expect(kinds(rows).filter((k) => k === "split")).toHaveLength(15);
   });
 });
+
+describe("drafts and the composer", () => {
+  const draft = (id: number, side: "LEFT" | "RIGHT", line: number) =>
+    ({
+      id, kind: "thread", subjectType: "LINE", path: "src/lib.rs", side, line, startSide: null, startLine: null,
+      replyToThread: null, bodyMd: `draft ${id}`, anchorRevisionId: 1, anchor: null, remapStatus: "ok",
+      remapProposal: null, resolution: null, staged: false, createdAt: "", updatedAt: "",
+    }) as const;
+
+  test("sit under their line after existing threads", () => {
+    const rows = buildRows(diff, "unified", {}, [thread("RIGHT", 5)], {
+      drafts: [draft(1, "RIGHT", 5), draft(2, "RIGHT", 21)],
+      composer: { side: "RIGHT", line: 5, start: null, commentId: null },
+    });
+    const i = rows.findIndex((r) => r.type === "unified" && r.newNo === 5);
+    expect(rows.slice(i + 1, i + 4).map((r) => r.type)).toEqual(["thread", "draft", "composer"]);
+    const j = rows.findIndex((r) => r.type === "unified" && r.newNo === 21);
+    expect(rows[j + 1]).toMatchObject({ type: "draft", comment: { id: 2 } });
+  });
+
+  test("a draft being edited shows as the composer", () => {
+    const rows = buildRows(diff, "split", {}, [], {
+      drafts: [draft(1, "RIGHT", 5)],
+      composer: { side: "RIGHT", line: 5, start: null, commentId: 1 },
+    });
+    expect(rows.filter((r) => r.type === "draft")).toHaveLength(0);
+    expect(rows.filter((r) => r.type === "composer")).toHaveLength(1);
+  });
+});

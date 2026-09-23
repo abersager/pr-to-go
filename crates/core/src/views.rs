@@ -210,6 +210,8 @@ pub struct PrDetail {
     pub reviews: Vec<ReviewEntry>,
     pub threads: Vec<ThreadEntry>,
     pub issue_comments: Vec<IssueCommentEntry>,
+    /// The active draft review, if any.
+    pub draft: Option<crate::drafts::DraftView>,
 }
 
 pub fn revision_info(c: &Connection, id: i64) -> Result<RevisionInfo> {
@@ -323,6 +325,10 @@ pub fn get_pr(db: &Db, pr_id: i64) -> Result<PrDetail> {
             reviews,
             threads,
             issue_comments,
+            draft: match crate::drafts::active_draft_id(c, pr_id)? {
+                Some(id) => Some(crate::drafts::draft_view(c, id)?),
+                None => None,
+            },
         })
     })
 }

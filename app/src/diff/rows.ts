@@ -2,7 +2,7 @@
 // unchanged gaps between them are filled from the stored file contents when
 // the user expands them (DESIGN.md §8). Pure, so it's unit-tested.
 
-import type { FileDiff, Hunk, LineKind, ThreadEntry } from "../types";
+import type { DraftComment, FileDiff, Hunk, LineKind, ThreadEntry } from "../types";
 
 export type Side = "LEFT" | "RIGHT";
 
@@ -45,7 +45,24 @@ export type Row =
       hunk: number | null;
     }
   | { type: "split"; key: string; left: Cell | null; right: Cell | null }
-  | { type: "thread"; key: string; side: Side; line: number; thread: ThreadEntry };
+  | { type: "thread"; key: string; side: Side; line: number; thread: ThreadEntry }
+  | { type: "draft"; key: string; side: Side; line: number; comment: DraftComment }
+  | { type: "composer"; key: string; side: Side; line: number; at: ComposerAt };
+
+/** Where a new or edited comment is being written. */
+export type ComposerAt = {
+  side: Side;
+  line: number;
+  start: { side: Side; line: number } | null;
+  /** Set once the draft comment exists (after the first autosave). */
+  commentId: number | null;
+};
+
+export type Extras = {
+  /** Draft comments on this file, anchored to the revision being shown. */
+  drafts?: DraftComment[];
+  composer?: ComposerAt | null;
+};
 
 export type Expansion = { top: number; bottom: number };
 export type Expansions = Record<number, Expansion>;
@@ -100,7 +117,13 @@ export function computeGaps(hunks: Hunk[], head: string[] | null, base: string[]
 
 export type Mode = "split" | "unified";
 
-export function buildRows(diff: FileDiff, mode: Mode, expansions: Expansions, threads: ThreadEntry[]): Row[] {
+export function buildRows(
+  diff: FileDiff,
+  mode: Mode,
+  expansions: Expansions,
+  threads: ThreadEntry[],
+  extras: Extras = {},
+): Row[] {
   const head = splitLines(diff.headText);
   const base = splitLines(diff.baseText);
   const gaps = computeGaps(diff.hunks, head, base);
@@ -110,12 +133,27 @@ export function buildRows(diff: FileDiff, mode: Mode, expansions: Expansions, th
     const key = `${t.diffSide ?? "RIGHT"}:${t.line}`;
     byLine.set(key, [...(byLine.get(key) ?? []), t]);
   }
+  const draftsByLine = new Map<string, DraftComment[]>();
+  for (const d of extras.drafts ?? []) {
+    if (d.kind !== "thread" || d.subjectType !== "LINE" || d.line === null || d.path !== diff.path) continue;
+    if (extras.composer?.commentId === d.id) continue; // shown as the composer instead
+    const key = `${d.side ?? "RIGHT"}:${d.line}`;
+    draftsByLine.set(key, [...(draftsByLine.get(key) ?? []), d]);
+  }
+  const composer = extras.composer ?? null;
   const rows: Row[] = [];
 
+  // Existing threads, then the user's drafts, then the open composer.
   const pushThreads = (side: Side, line: number | null) => {
     if (line === null) return;
     for (const t of byLine.get(`${side}:${line}`) ?? []) {
       rows.push({ type: "thread", key: `t-${t.nodeId}`, side, line, thread: t });
+    }
+    for (const d of draftsByLine.get(`${side}:${line}`) ?? []) {
+      rows.push({ type: "draft", key: `d-${d.id}`, side, line, comment: d });
+    }
+    if (composer && composer.side === side && composer.line === line) {
+      rows.push({ type: "composer", key: "composer", side, line, at: composer });
     }
   };
 

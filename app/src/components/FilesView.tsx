@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { api } from "../api";
 import type { Mode } from "../diff/rows";
-import type { FileEntry, PrDetail } from "../types";
+import type { Draft, FileEntry, PrDetail } from "../types";
 import { useAsync } from "../util/useAsync";
 import { DiffView } from "./DiffView";
 
@@ -20,15 +20,32 @@ export function FilesView({
   onViewedChanged,
   file,
   onFile,
+  draft,
+  editable,
+  onDraft,
+  onNotEditable,
 }: {
   pr: PrDetail;
   onViewedChanged: () => void;
   file: string | null;
   onFile: (path: string) => void;
+  draft: Draft | null;
+  editable: boolean;
+  onDraft: (d: Draft | null) => void;
+  onNotEditable: () => void;
 }) {
   const [mode, setMode] = useState<Mode>(loadMode);
+  const [fileComposer, setFileComposer] = useState(false);
+  const draftCount = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const c of draft?.comments ?? []) if (c.path) m.set(c.path, (m.get(c.path) ?? 0) + 1);
+    return m;
+  }, [draft]);
   const selected = pr.files.some((f) => f.path === file) ? file : (pr.files[0]?.path ?? null);
-  const setSelected = onFile;
+  const setSelected = (path: string) => {
+    setFileComposer(false);
+    onFile(path);
+  };
   const revisionId = pr.revision?.id ?? null;
   const diff = useAsync(
     () => (revisionId && selected ? api.fileDiff(revisionId, selected) : Promise.resolve(null)),
@@ -80,6 +97,11 @@ export function FilesView({
                 {f.path}
               </span>
               {threadsByPath.get(f.path) && <span className="count">{threadsByPath.get(f.path)}</span>}
+              {draftCount.get(f.path) && (
+                <span className="count draft" title="Your draft comments">
+                  {draftCount.get(f.path)}
+                </span>
+              )}
               {(f.patchStatus === "too_large" || (f.contentStatus !== "ok" && f.contentStatus !== "binary_skipped")) && (
                 <span className="warn-dot" title="Not fully available offline" />
               )}
@@ -100,6 +122,13 @@ export function FilesView({
             {diff.data?.prevPath && <span className="muted"> (from {diff.data.prevPath})</span>}
           </span>
           <span className="spacer" />
+          <button
+            onClick={() => (editable ? setFileComposer(true) : onNotEditable())}
+            disabled={!diff.data || fileComposer}
+            title="Comment on the whole file"
+          >
+            Comment on file
+          </button>
           <div className="segmented">
             <button className={mode === "split" ? "on" : ""} onClick={() => setModeSaved("split")}>
               Split
@@ -110,7 +139,22 @@ export function FilesView({
           </div>
         </div>
         {diff.error && <p className="error pad">{diff.error.message}</p>}
-        {diff.data && <DiffView key={`${revisionId}:${selected}`} diff={diff.data} threads={pr.threads} mode={mode} />}
+        {diff.data && revisionId && (
+          <DiffView
+            key={`${revisionId}:${selected}`}
+            diff={diff.data}
+            threads={pr.threads}
+            mode={mode}
+            prId={pr.id}
+            revisionId={revisionId}
+            draft={draft}
+            editable={editable}
+            onDraft={onDraft}
+            onNotEditable={onNotEditable}
+            fileComposer={fileComposer}
+            onFileComposer={setFileComposer}
+          />
+        )}
         {!selected && <p className="muted pad">This pull request has no changed files.</p>}
       </section>
     </div>

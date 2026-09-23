@@ -18,6 +18,15 @@ fn out<T: Serialize>(v: T) -> Result<Value> {
     Ok(serde_json::to_value(v)?)
 }
 
+/// Distinguishes a missing field (`None`) from an explicit `null` (`Some(None)`).
+fn double_option<'de, D, T>(d: D) -> std::result::Result<Option<Option<T>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: serde::Deserialize<'de>,
+{
+    serde::Deserialize::deserialize(d).map(Some)
+}
+
 #[derive(serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct PrId {
@@ -110,6 +119,51 @@ impl Core {
                 let a: A = args(a)?;
                 out(self.set_file_viewed(a.pr_id, &a.path, a.head_blob_oid.as_deref(), a.viewed)?)
             }
+            "draft" => out(self.draft(args::<PrId>(a)?.pr_id)?),
+            "add_draft_comment" => {
+                #[derive(serde::Deserialize)]
+                #[serde(rename_all = "camelCase")]
+                struct A {
+                    pr_id: i64,
+                    comment: crate::drafts::NewComment,
+                }
+                let a: A = args(a)?;
+                out(self.add_draft_comment(a.pr_id, a.comment)?)
+            }
+            "update_draft_comment" => {
+                #[derive(serde::Deserialize)]
+                #[serde(rename_all = "camelCase")]
+                struct A {
+                    comment_id: i64,
+                    body: String,
+                }
+                let a: A = args(a)?;
+                out(self.update_draft_comment(a.comment_id, &a.body)?)
+            }
+            "delete_draft_comment" => {
+                #[derive(serde::Deserialize)]
+                #[serde(rename_all = "camelCase")]
+                struct A {
+                    comment_id: i64,
+                }
+                out(self.delete_draft_comment(args::<A>(a)?.comment_id)?)
+            }
+            "update_draft_review" => {
+                #[derive(serde::Deserialize)]
+                #[serde(rename_all = "camelCase")]
+                struct A {
+                    pr_id: i64,
+                    body: Option<String>,
+                    /// Absent: leave as is. `null`: clear.
+                    #[serde(default, deserialize_with = "double_option")]
+                    verdict: Option<Option<crate::drafts::Verdict>>,
+                }
+                let a: A = args(a)?;
+                out(self.update_draft_review(a.pr_id, a.body.as_deref(), a.verdict)?)
+            }
+            "queue_review" => out(self.queue_review(args::<PrId>(a)?.pr_id)?),
+            "unqueue_review" => out(self.unqueue_review(args::<PrId>(a)?.pr_id)?),
+            "discard_review" => out(self.discard_review(args::<PrId>(a)?.pr_id)?),
             _ => Err(Error::Invalid(format!("unknown command {cmd}"))),
         }
     }

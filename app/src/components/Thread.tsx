@@ -16,7 +16,15 @@ export function DiffHunkSnippet({ hunk }: { hunk: string }) {
   );
 }
 
-export function ThreadView({ thread, showContext = false }: { thread: ThreadEntry; showContext?: boolean }) {
+export function ThreadView({
+  thread,
+  showContext = false,
+  footer,
+}: {
+  thread: ThreadEntry;
+  showContext?: boolean;
+  footer?: React.ReactNode;
+}) {
   const first = thread.comments[0];
   return (
     <div className={`thread ${thread.isResolved ? "resolved" : ""}`}>
@@ -36,6 +44,7 @@ export function ThreadView({ thread, showContext = false }: { thread: ThreadEntr
           <Html html={c.bodyHtml} />
         </div>
       ))}
+      {footer}
     </div>
   );
 }

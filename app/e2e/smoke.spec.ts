@@ -19,7 +19,7 @@ test("review a synced PR: description, checks, diff, threads, context", async ({
   await page.getByRole("button", { name: /^Files/ }).click();
   await page.locator(".file-list li", { hasText: "src/retry.rs" }).click();
   await expect(page.locator(".diff-scroll")).toContainText("pub struct Backoff");
-  await expect(page.locator(".thread-row")).toContainText("Should attempts be configurable");
+  await expect(page.locator(".thread", { hasText: "Should attempts be configurable" })).toBeVisible();
 
   // client.rs: the outdated thread is tucked away; expanding context works.
   await page.locator(".file-list li", { hasText: "src/client.rs" }).click();

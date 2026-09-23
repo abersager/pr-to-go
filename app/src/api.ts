@@ -4,6 +4,9 @@ import type {
   AuthStatus,
   Connectivity,
   CoreEvent,
+  Draft,
+  NewComment,
+  Verdict,
   FileDiff,
   PrDetail,
   PrSummary,
@@ -63,6 +66,15 @@ export const api = {
   markSeen: (prId: number) => call<void>("mark_seen", { prId }),
   setFileViewed: (prId: number, path: string, headBlobOid: string | null, viewed: boolean) =>
     call<void>("set_file_viewed", { prId, path, headBlobOid, viewed }),
+  draft: (prId: number) => call<Draft | null>("draft", { prId }),
+  addDraftComment: (prId: number, comment: NewComment) => call<Draft>("add_draft_comment", { prId, comment }),
+  updateDraftComment: (commentId: number, body: string) => call<Draft>("update_draft_comment", { commentId, body }),
+  deleteDraftComment: (commentId: number) => call<Draft | null>("delete_draft_comment", { commentId }),
+  updateDraftReview: (prId: number, change: { body?: string; verdict?: Verdict | null }) =>
+    call<Draft>("update_draft_review", { prId, ...change }),
+  queueReview: (prId: number) => call<Draft>("queue_review", { prId }),
+  unqueueReview: (prId: number) => call<Draft>("unqueue_review", { prId }),
+  discardReview: (prId: number) => call<void>("discard_review", { prId }),
 };
 
 export function onCoreEvent(cb: (e: CoreEvent) => void): Promise<UnlistenFn> {

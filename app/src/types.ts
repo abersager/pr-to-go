@@ -142,6 +142,7 @@ export type PrDetail = PrSummary & {
   reviews: ReviewEntry[];
   threads: ThreadEntry[];
   issueComments: IssueCommentEntry[];
+  draft: Draft | null;
 };
 
 export type LineKind = "context" | "add" | "del";
@@ -189,3 +190,79 @@ export type CoreEvent =
   | { type: "connectivity"; online: boolean; workOffline: boolean; detail: string | null }
   | { type: "outboxChanged"; prId: number; draftReviewId: number; status: string }
   | { type: "inboxChanged" };
+
+export type Side = "LEFT" | "RIGHT";
+export type Verdict = "COMMENT" | "APPROVE" | "REQUEST_CHANGES";
+
+export type SideSnapshot = { first: number; last: number; lines: string[]; before: string[]; after: string[] };
+
+export type AnchorSnapshot = {
+  hunkHeader: string;
+  left: SideSnapshot | null;
+  right: SideSnapshot | null;
+  baseBlobOid: string | null;
+  headBlobOid: string | null;
+};
+
+export type DraftComment = {
+  id: number;
+  kind: "thread" | "reply";
+  subjectType: "LINE" | "FILE";
+  path: string | null;
+  side: Side | null;
+  line: number | null;
+  startSide: Side | null;
+  startLine: number | null;
+  replyToThread: string | null;
+  bodyMd: string;
+  anchorRevisionId: number | null;
+  anchor: AnchorSnapshot | null;
+  remapStatus: "ok" | "clean" | "fuzzy" | "not_commentable" | "orphaned";
+  remapProposal: unknown;
+  resolution: "remap" | "to_file" | "to_summary" | "drop" | null;
+  staged: boolean;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type DraftStatus =
+  | "draft"
+  | "queued"
+  | "preflight"
+  | "needs_attention"
+  | "staging"
+  | "submitting"
+  | "submitted"
+  | "discarded";
+
+export type Draft = {
+  id: number;
+  prId: number;
+  status: DraftStatus;
+  bodyMd: string;
+  verdict: Verdict | null;
+  basisRevisionId: number;
+  targetMode: "current_head" | "reviewed_commit";
+  targetRevisionId: number | null;
+  attention: unknown;
+  lastError: string | null;
+  lastErrorKind: string | null;
+  nextAttemptAt: string | null;
+  queuedAt: string | null;
+  submittedAt: string | null;
+  submittedUrl: string | null;
+  comments: DraftComment[];
+};
+
+export type NewComment = {
+  revisionId: number;
+  kind: "thread" | "reply";
+  subjectType: "LINE" | "FILE";
+  path?: string | null;
+  side?: Side | null;
+  line?: number | null;
+  startSide?: Side | null;
+  startLine?: number | null;
+  replyToThread?: string | null;
+  body: string;
+};
