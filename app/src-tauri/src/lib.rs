@@ -43,6 +43,8 @@ fn reveal_logs(app: AppHandle) -> Result<(), String> {
 /// bodies, so the token never reaches the log.
 fn init_logging(app: &tauri::App) -> Option<WorkerGuard> {
     let dir = app.path().app_log_dir().ok()?;
+    // The appender prunes old files at start and complains if there's no folder.
+    std::fs::create_dir_all(&dir).ok()?;
     let files = rolling::Builder::new()
         .rotation(Rotation::DAILY)
         .filename_prefix("pr-to-go")

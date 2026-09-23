@@ -15,7 +15,7 @@
     ],
     "security": {
       "csp": "default-src 'self'; img-src 'self' data: prtg: http://prtg.localhost; style-src 'self' 'unsafe-inline'; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self' blob:; connect-src ipc: http://ipc.localhost",
-      "pattern": { "use": "brownfield" }
+      "pattern": { "use": "isolation", "options": { "dir": "../src-isolation" } }
     }
   },
   "bundle": {

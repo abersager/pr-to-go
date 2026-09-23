@@ -3,5 +3,5 @@
   "identifier": "default",
   "description": "The main window may call PR to Go commands and open links in the system browser.",
   "windows": ["main"],
-  "permissions": ["core:default", "opener:allow-open-url"]
+  "permissions": ["core:event:default", "opener:allow-open-url"]
 }
