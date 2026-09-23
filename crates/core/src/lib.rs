@@ -11,6 +11,7 @@ pub mod drafts;
 pub mod error;
 pub mod github;
 pub mod outbox;
+pub mod remap;
 pub mod service;
 pub mod sync;
 pub mod views;

@@ -320,3 +320,20 @@ export type OutboxItem = {
   nextAttemptAt: string | null;
   attention: Attention | null;
 };
+
+export type RemapStatus = "clean" | "fuzzy" | "not_commentable" | "orphaned";
+
+export type Proposal = {
+  status: RemapStatus;
+  path: string | null;
+  side: Side | null;
+  line: number | null;
+  startSide: Side | null;
+  startLine: number | null;
+  confidence: number;
+  oldLines: string[];
+  newLines: string[];
+  suggestionStale: boolean;
+  fileInDiff: boolean;
+  toRevision: number;
+};

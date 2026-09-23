@@ -177,6 +177,33 @@ impl Core {
                 let a: A = args(a)?;
                 out(self.resolve_review(a.pr_id, a.resolution)?)
             }
+            "draft_proposals" => {
+                let proposals = self.draft_proposals(args::<PrId>(a)?.pr_id)?;
+                out(proposals
+                    .into_iter()
+                    .map(|(id, p)| serde_json::json!({ "commentId": id, "proposal": p }))
+                    .collect::<Vec<_>>())
+            }
+            "rebase_draft" => {
+                #[derive(serde::Deserialize)]
+                #[serde(rename_all = "camelCase")]
+                struct A {
+                    pr_id: i64,
+                    comments: Vec<crate::outbox::CommentResolution>,
+                }
+                let a: A = args(a)?;
+                out(self.rebase_draft(a.pr_id, a.comments)?)
+            }
+            "interdiff" => {
+                #[derive(serde::Deserialize)]
+                #[serde(rename_all = "camelCase")]
+                struct A {
+                    from_revision: i64,
+                    to_revision: i64,
+                }
+                let a: A = args(a)?;
+                out(self.interdiff(a.from_revision, a.to_revision)?)
+            }
             _ => Err(Error::Invalid(format!("unknown command {cmd}"))),
         }
     }

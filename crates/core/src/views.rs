@@ -512,3 +512,94 @@ pub fn file_diff(db: &Db, blobs: &BlobStore, revision_id: i64, path: &str) -> Re
         head_binary,
     })
 }
+
+/// What changed in the PR between two synced versions, file by file (for
+/// "changes since your review"). Diffs are computed locally from the stored
+/// contents, for viewing only. If the merge base moved too (a rebase), the
+/// head-to-head diff also includes upstream changes.
+///
+/// `change_type` is `changed`, `newly_changed` (the PR didn't touch the file
+/// before), `no_longer_changed` (the PR's changes to it were dropped) or
+/// `unknown` (the file left or joined the PR across a rebase, so one side's
+/// contents weren't synced).
+pub fn interdiff(db: &Db, blobs: &BlobStore, from_revision: i64, to_revision: i64) -> Result<Vec<FileDiff>> {
+    struct F {
+        path: String,
+        base: Option<String>,
+        head: Option<String>,
+    }
+    let load = |rev: i64| -> Result<(String, Vec<F>)> {
+        db.read(|c| {
+            let mb: String =
+                c.query_row("SELECT merge_base_oid FROM pr_revision WHERE id = ?1", [rev], |r| r.get(0))?;
+            let mut st = c.prepare(
+                "SELECT path, base_blob_oid, head_blob_oid FROM revision_file WHERE revision_id = ?1",
+            )?;
+            let rows = st
+                .query_map([rev], |r| Ok(F { path: r.get(0)?, base: r.get(1)?, head: r.get(2)? }))?
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok((mb, rows))
+        })
+    };
+    let ((old_mb, old), (new_mb, new)) = (load(from_revision)?, load(to_revision)?);
+    let same_base = old_mb == new_mb;
+    let mut paths: Vec<&str> = old.iter().chain(new.iter()).map(|f| f.path.as_str()).collect();
+    paths.sort();
+    paths.dedup();
+    let mut out = Vec::new();
+    for path in paths {
+        let o = old.iter().find(|f| f.path == path);
+        let n = new.iter().find(|f| f.path == path);
+        // A file outside the PR's diff is unchanged from the merge base.
+        let (a, b, change_type) = match (o, n) {
+            (Some(o), Some(n)) => (o.head.clone(), n.head.clone(), "changed"),
+            (Some(o), None) if same_base => (o.head.clone(), o.base.clone(), "no_longer_changed"),
+            (None, Some(n)) if same_base => (n.base.clone(), n.head.clone(), "newly_changed"),
+            (Some(o), None) => (o.head.clone(), None, "unknown"),
+            (None, Some(n)) => (None, n.head.clone(), "unknown"),
+            (None, None) => continue,
+        };
+        if a == b {
+            continue;
+        }
+        let binary = |o: &Option<String>| -> Result<bool> {
+            Ok(match o {
+                Some(o) => blobs.is_binary(o)?.unwrap_or(false),
+                None => false,
+            })
+        };
+        let (base_binary, head_binary) = (binary(&a)?, binary(&b)?);
+        let text = |o: &Option<String>, bin: bool| -> Result<Option<String>> {
+            match o {
+                Some(o) if !bin => blobs.get_text(o),
+                _ => Ok(None),
+            }
+        };
+        let (ta, tb) = (text(&a, base_binary)?, text(&b, head_binary)?);
+        let hunks = if base_binary || head_binary || change_type == "unknown" {
+            vec![]
+        } else {
+            parse_patch(&local_patch(ta.as_deref().unwrap_or(""), tb.as_deref().unwrap_or("")))
+                .map_err(Error::Internal)?
+        };
+        out.push(FileDiff {
+            path: path.to_string(),
+            prev_path: None,
+            change_type: change_type.into(),
+            patch_status: "ok".into(),
+            content_status: "ok".into(),
+            hunks,
+            source: "local",
+            commentable: false,
+            base_text: ta,
+            head_text: tb,
+            base_blob_oid: a,
+            head_blob_oid: b,
+            base_binary,
+            head_binary,
+        });
+    }
+    // Files the PR still changes first: they're what the review is about.
+    out.sort_by_key(|d| (d.change_type != "changed", d.path.clone()));
+    Ok(out)
+}

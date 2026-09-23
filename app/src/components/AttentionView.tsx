@@ -2,11 +2,12 @@
 // Every reason gets a decision, then one resolution is sent and the outbox
 // checks everything again before anything reaches GitHub.
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { api } from "../api";
 import type { CommentAction, CommentResolution, Draft, DraftComment, PrDetail, Reason, Verdict } from "../types";
 import { rangeLabel } from "./DraftCard";
 import { openExternal } from "./Html";
+import { Interdiff, ProposalRow, defaultAction, proposalOf, suggestedAction } from "./Proposals";
 
 const ACTION_LABEL: Record<CommentAction, string> = {
   remap: "Move to a new line",
@@ -81,12 +82,25 @@ export function AttentionView({
   const blocking = reasons.filter((r) => r.kind === "new_blocking_review");
   const needsVerdict = (headMoved?.kind === "head_moved" && headMoved.verdict_stale) || blocking.length > 0;
 
+  // Comments that moved get the remap engine's proposals.
+  const moved = headMoved?.kind === "head_moved" && target === "current_head" ? headMoved.comments : [];
+  useEffect(() => {
+    // Clean moves are accepted unless the user says otherwise.
+    setActions((x) => {
+      const next = { ...x };
+      for (const id of moved) {
+        const d = defaultAction(proposalOf(byId.get(id)!));
+        if (d && next[id] === undefined) next[id] = d;
+      }
+      return next;
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [target]);
+
   // Which comments need an action, and which actions make sense for each.
-  const commentChoices: { id: number; options: CommentAction[] }[] = [];
+  const commentChoices: { id: number; options: CommentAction[]; proposal?: boolean }[] = [];
+  for (const id of moved) commentChoices.push({ id, options: [], proposal: true });
   for (const r of reasons) {
-    if (r.kind === "head_moved" && target === "current_head") {
-      for (const id of r.comments) commentChoices.push({ id, options: ["to_file", "to_summary", "drop"] });
-    }
     if (r.kind === "reply_target_gone") commentChoices.push({ id: r.comment, options: ["to_summary", "drop"] });
     if (r.kind === "comment_rejected" && r.comment !== null) {
       const c = byId.get(r.comment);
@@ -225,15 +239,42 @@ export function AttentionView({
 
       {commentChoices.length > 0 && (
         <div className="attention-card">
-          <p className="small">
+          <div className="rebase-banner small">
             <strong>Your comments</strong>
-          </p>
-          {commentChoices.map((c) => (
-            <div key={c.id} className="comment-choice">
-              <div className="small">{commentLabel(byId.get(c.id))}</div>
-              <ActionPicker value={actions[c.id]} options={c.options} onChange={(a) => setAction(c.id, a)} />
-            </div>
-          ))}
+            <span className="spacer" />
+            {moved.length > 0 && (
+              <button
+                className="link"
+                onClick={() =>
+                  setActions((x) => {
+                    const next = { ...x };
+                    for (const id of moved) next[id] ??= suggestedAction(proposalOf(byId.get(id)!));
+                    return next;
+                  })
+                }
+              >
+                Accept all suggestions
+              </button>
+            )}
+          </div>
+          {headMoved?.kind === "head_moved" && moved.length > 0 && (
+            <Interdiff from={headMoved.from_revision} to={headMoved.to_revision} />
+          )}
+          {commentChoices.map((c) =>
+            c.proposal ? (
+              <ProposalRow
+                key={c.id}
+                comment={byId.get(c.id)!}
+                action={actions[c.id]}
+                onAction={(a) => setAction(c.id, a)}
+              />
+            ) : (
+              <div key={c.id} className="comment-choice">
+                <div className="small">{commentLabel(byId.get(c.id))}</div>
+                <ActionPicker value={actions[c.id]} options={c.options} onChange={(a) => setAction(c.id, a)} />
+              </div>
+            ),
+          )}
         </div>
       )}
 

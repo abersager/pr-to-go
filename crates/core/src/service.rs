@@ -393,6 +393,11 @@ impl Core {
         views::file_diff(&self.db, &self.blobs, revision_id, path)
     }
 
+    /// What changed between two synced versions of a PR.
+    pub fn interdiff(&self, from_revision: i64, to_revision: i64) -> Result<Vec<views::FileDiff>> {
+        views::interdiff(&self.db, &self.blobs, from_revision, to_revision)
+    }
+
     /// Records that the user looked at this revision (for "updated since you
     /// last looked").
     pub fn mark_seen(&self, pr_id: i64) -> Result<()> {

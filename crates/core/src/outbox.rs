@@ -23,6 +23,7 @@ use crate::clock::parse_rfc3339;
 use crate::drafts::Verdict;
 use crate::error::{Error, Result};
 use crate::github::{GhError, OpKind, queries};
+use crate::remap::Proposal;
 use crate::service::{Core, Event};
 
 // ─── Attention ───────────────────────────────────────────────────────────
@@ -734,6 +735,11 @@ impl Core {
         }
         let reasons = self.db.read(|c| evaluate(c, id, &pending))?;
         if !reasons.is_empty() {
+            for r in &reasons {
+                if let Reason::HeadMoved { comments, to_revision, .. } = r {
+                    self.store_proposals(comments, *to_revision)?;
+                }
+            }
             return self.needs_attention(id, reasons);
         }
         let ack = self.db.read(|c| attention(c, id))?.acknowledged;
@@ -1421,31 +1427,78 @@ impl Core {
         })
     }
 
-    /// Applies the user's decisions for a review that needs attention, and
-    /// queues it again. Preflight re-checks everything before sending.
-    pub fn resolve_review(&self, pr_id: i64, res: Resolution) -> Result<crate::drafts::DraftView> {
-        let now = self.now();
-        // Validate remaps against the current revision first (reading blobs
-        // needs the read lock, so this happens outside the write).
-        let current: i64 = self.db.read(|c| {
+    fn current_revision(&self, pr_id: i64) -> Result<i64> {
+        self.db.read(|c| {
             c.query_row("SELECT current_revision_id FROM pull_request WHERE id = ?1", [pr_id], |r| {
                 r.get::<_, Option<i64>>(0)
             })?
             .ok_or_else(|| Error::Invalid("This pull request hasn't been synced.".into()))
+        })
+    }
+
+    /// Computes and stores where each comment could go in `to_revision`
+    /// (shown to the user in the "PR changed" prompt).
+    pub(crate) fn store_proposals(&self, comments: &[i64], to_revision: i64) -> Result<Vec<(i64, Proposal)>> {
+        let mut out = Vec::new();
+        for &cid in comments {
+            if let Some(p) = crate::remap::propose_for_comment(&self.db, &self.blobs, cid, to_revision)? {
+                out.push((cid, p));
+            }
+        }
+        self.db.write(|tx| {
+            for (cid, p) in &out {
+                let status = serde_json::to_value(p.status)?.as_str().unwrap_or("orphaned").to_string();
+                tx.execute(
+                    "UPDATE draft_comment SET remap_status = ?2, remap_proposal = ?3 WHERE id = ?1",
+                    params![cid, status, serde_json::to_string(p)?],
+                )?;
+            }
+            Ok(())
         })?;
+        Ok(out)
+    }
+
+    /// Validates the remaps and file conversions in `resolutions` against the
+    /// current revision. A remap without a line takes the stored proposal.
+    /// Runs outside any transaction (it reads blobs).
+    fn prepare_remaps(
+        &self,
+        pr_id: i64,
+        current: i64,
+        resolutions: &[CommentResolution],
+    ) -> Result<Vec<PreparedRemap>> {
         let mut remaps = Vec::new();
-        for cr in res.comments.iter().filter(|c| c.action == "remap" || c.action == "to_file") {
-            let (path, body, kind): (Option<String>, String, String) = self.db.read(|c| {
-                Ok(c.query_row(
-                    "SELECT path, body_md, kind FROM draft_comment WHERE id = ?1",
-                    [cr.id],
-                    |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
-                )?)
-            })?;
+        for cr in resolutions.iter().filter(|c| c.action == "remap" || c.action == "to_file") {
+            let (path, body, kind, proposal): (Option<String>, String, String, Option<String>) =
+                self.db.read(|c| {
+                    Ok(c.query_row(
+                        "SELECT path, body_md, kind, remap_proposal FROM draft_comment WHERE id = ?1",
+                        [cr.id],
+                        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+                    )?)
+                })?;
             if kind == "reply" {
                 return Err(Error::Invalid(
                     "Replies can't be moved; drop them or fold them into the summary.".into(),
                 ));
+            }
+            let proposal: Option<Proposal> = proposal.and_then(|p| serde_json::from_str(&p).ok());
+            let mut cr = cr.clone();
+            if cr.action == "remap" && cr.line.is_none() {
+                let p = proposal.as_ref().filter(|p| p.line.is_some()).ok_or_else(|| {
+                    Error::Invalid(
+                        "There's no proposed line for this comment; pick one or choose another action."
+                            .into(),
+                    )
+                })?;
+                cr.side = p.side;
+                cr.line = p.line;
+                cr.start_side = p.start_side;
+                cr.start_line = p.start_line;
+                cr.path = cr.path.or(p.path.clone());
+            }
+            if cr.action == "to_file" && cr.path.is_none() {
+                cr.path = proposal.and_then(|p| p.path);
             }
             let n = crate::drafts::NewComment {
                 revision_id: current,
@@ -1464,8 +1517,68 @@ impl Core {
                 body: if cr.action == "to_file" { crate::drafts::strip_suggestions(&body) } else { body },
             };
             let v = self.db.read(|c| crate::drafts::validate(c, pr_id, &n))?.capture(&self.blobs)?;
-            remaps.push((cr.id, n, v));
+            remaps.push(PreparedRemap { id: cr.id, comment: n, validated: v });
         }
+        Ok(remaps)
+    }
+
+    /// Applies per-comment decisions inside a write transaction.
+    fn apply_comment_resolutions(
+        tx: &Transaction,
+        review_id: i64,
+        resolutions: &[CommentResolution],
+        remaps: &[PreparedRemap],
+        now: &str,
+    ) -> Result<()> {
+        for cr in resolutions {
+            let owned: Option<i64> = tx
+                .query_row("SELECT draft_review_id FROM draft_comment WHERE id = ?1", [cr.id], |r| r.get(0))
+                .optional()?;
+            if owned != Some(review_id) {
+                return Err(Error::Invalid(format!("comment {} isn't part of this review", cr.id)));
+            }
+            let resolution = match cr.action.as_str() {
+                "drop" | "to_summary" => Some(cr.action.as_str()),
+                "keep" | "remap" | "to_file" => None,
+                other => return Err(Error::Invalid(format!("unknown action {other}"))),
+            };
+            tx.execute(
+                "UPDATE draft_comment SET resolution = ?2, staged_node_id = NULL, staged_thread_node_id = NULL,
+                   remap_status = 'ok', remap_proposal = NULL, updated_at = ?3 WHERE id = ?1",
+                params![cr.id, resolution, now],
+            )?;
+        }
+        for r in remaps {
+            let (n, v) = (&r.comment, &r.validated);
+            let file = n.subject_type == crate::drafts::SubjectType::File;
+            tx.execute(
+                "UPDATE draft_comment SET path = ?2, subject_type = ?3, side = ?4, line = ?5, start_side = ?6,
+                   start_line = ?7, anchor_revision_id = ?8, anchor_snapshot = ?9, body_md = ?10,
+                   resolution = NULL, updated_at = ?11 WHERE id = ?1",
+                params![
+                    r.id,
+                    n.path,
+                    if file { "FILE" } else { "LINE" },
+                    if file { None } else { n.side.map(|s| s.as_str()) },
+                    if file { None } else { n.line },
+                    v.start.map(|s| s.0.as_str()),
+                    v.start.map(|s| s.1),
+                    n.revision_id,
+                    v.anchor.as_ref().map(serde_json::to_string).transpose()?,
+                    n.body,
+                    now,
+                ],
+            )?;
+        }
+        Ok(())
+    }
+
+    /// Applies the user's decisions for a review that needs attention, and
+    /// queues it again. Preflight re-checks everything before sending.
+    pub fn resolve_review(&self, pr_id: i64, res: Resolution) -> Result<crate::drafts::DraftView> {
+        let now = self.now();
+        let current = self.current_revision(pr_id)?;
+        let remaps = self.prepare_remaps(pr_id, current, &res.comments)?;
         let id = self.db.write(|tx| {
             let id = crate::drafts::active_draft_id(tx, pr_id)?
                 .ok_or_else(|| Error::Invalid("There's no review to resolve.".into()))?;
@@ -1495,44 +1608,7 @@ impl Core {
                 // current revision (preflight asks again if it moves again).
                 tx.execute("UPDATE draft_review SET target_revision_id = ?2 WHERE id = ?1", params![id, current])?;
             }
-            for cr in &res.comments {
-                let owned: Option<i64> = tx
-                    .query_row("SELECT draft_review_id FROM draft_comment WHERE id = ?1", [cr.id], |r| r.get(0))
-                    .optional()?;
-                if owned != Some(id) {
-                    return Err(Error::Invalid(format!("comment {} isn't part of this review", cr.id)));
-                }
-                let resolution = match cr.action.as_str() {
-                    "drop" | "to_summary" => Some(cr.action.as_str()),
-                    "keep" | "remap" | "to_file" => None,
-                    other => return Err(Error::Invalid(format!("unknown action {other}"))),
-                };
-                tx.execute(
-                    "UPDATE draft_comment SET resolution = ?2, staged_node_id = NULL, staged_thread_node_id = NULL,
-                       remap_status = 'ok', remap_proposal = NULL, updated_at = ?3 WHERE id = ?1",
-                    params![cr.id, resolution, now],
-                )?;
-            }
-            for (cid, n, v) in &remaps {
-                tx.execute(
-                    "UPDATE draft_comment SET path = ?2, subject_type = ?3, side = ?4, line = ?5, start_side = ?6,
-                       start_line = ?7, anchor_revision_id = ?8, anchor_snapshot = ?9, body_md = ?10,
-                       resolution = NULL, updated_at = ?11 WHERE id = ?1",
-                    params![
-                        cid,
-                        n.path,
-                        if n.subject_type == crate::drafts::SubjectType::File { "FILE" } else { "LINE" },
-                        if n.subject_type == crate::drafts::SubjectType::File { None } else { n.side.map(|s| s.as_str()) },
-                        if n.subject_type == crate::drafts::SubjectType::File { None } else { n.line },
-                        v.start.map(|s| s.0.as_str()),
-                        v.start.map(|s| s.1),
-                        n.revision_id,
-                        v.anchor.as_ref().map(serde_json::to_string).transpose()?,
-                        n.body,
-                        now,
-                    ],
-                )?;
-            }
+            Self::apply_comment_resolutions(tx, id, &res.comments, &remaps, &now)?;
             // Comments changed, so anything already staged must be rebuilt.
             if !res.comments.is_empty() {
                 release_pending_review(tx, id)?;
@@ -1549,4 +1625,59 @@ impl Core {
         self.kick_outbox();
         self.db.read(|c| crate::drafts::draft_view(c, id))
     }
+
+    /// For a draft still being written: where its comments from earlier
+    /// versions of the PR could go now. Stored on the comments too.
+    pub fn draft_proposals(&self, pr_id: i64) -> Result<Vec<(i64, Proposal)>> {
+        let current = self.current_revision(pr_id)?;
+        let comments: Vec<i64> = self.db.read(|c| {
+            let Some(id) = crate::drafts::active_draft_id(c, pr_id)? else { return Ok(vec![]) };
+            let mut st = c.prepare(
+                "SELECT id FROM draft_comment WHERE draft_review_id = ?1 AND kind = 'thread'
+                   AND (resolution IS NULL OR resolution = 'remap') AND anchor_revision_id IS NOT ?2",
+            )?;
+            let ids = st.query_map(params![id, current], |r| r.get(0))?.collect::<Result<Vec<_>, _>>()?;
+            Ok(ids)
+        })?;
+        self.store_proposals(&comments, current)
+    }
+
+    /// Moves a draft onto the PR's current version: applies the decisions
+    /// for its comments from earlier versions, and makes the current
+    /// version the review's target.
+    pub fn rebase_draft(
+        &self,
+        pr_id: i64,
+        comments: Vec<CommentResolution>,
+    ) -> Result<crate::drafts::DraftView> {
+        let now = self.now();
+        let current = self.current_revision(pr_id)?;
+        let remaps = self.prepare_remaps(pr_id, current, &comments)?;
+        let id = self.db.write(|tx| {
+            let id = crate::drafts::active_draft_id(tx, pr_id)?
+                .ok_or_else(|| Error::Invalid("There's no draft review.".into()))?;
+            crate::drafts::require_editable(tx, id)?;
+            Self::apply_comment_resolutions(tx, id, &comments, &remaps, &now)?;
+            let cursor: Option<String> = tx.query_row(
+                "SELECT max(submitted_at) FROM review WHERE pr_id = ?1 AND state != 'PENDING'",
+                [pr_id],
+                |r| r.get(0),
+            )?;
+            tx.execute(
+                "UPDATE draft_review SET target_revision_id = ?2, basis_revision_id = ?2, basis_review_cursor = ?3,
+                   updated_at = ?4 WHERE id = ?1",
+                params![id, current, cursor, now],
+            )?;
+            log(tx, id, &now, "rebase", "ok", None)?;
+            Ok(id)
+        })?;
+        self.db.read(|c| crate::drafts::draft_view(c, id))
+    }
+}
+
+/// A remap or file conversion, checked against the current revision.
+struct PreparedRemap {
+    id: i64,
+    comment: crate::drafts::NewComment,
+    validated: crate::drafts::Validated,
 }

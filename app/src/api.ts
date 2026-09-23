@@ -5,8 +5,11 @@ import type {
   Connectivity,
   CoreEvent,
   Draft,
+  CommentResolution,
+  FileDiff as FileDiffT,
   NewComment,
   OutboxItem,
+  Proposal,
   Resolution,
   Verdict,
   FileDiff,
@@ -81,6 +84,11 @@ export const api = {
   retryReview: (prId: number) => call<void>("retry_review", { prId }),
   exportReviewMarkdown: (prId: number) => call<string>("export_review_markdown", { prId }),
   resolveReview: (prId: number, resolution: Resolution) => call<Draft>("resolve_review", { prId, resolution }),
+  draftProposals: (prId: number) =>
+    call<{ commentId: number; proposal: Proposal }[]>("draft_proposals", { prId }),
+  rebaseDraft: (prId: number, comments: CommentResolution[]) => call<Draft>("rebase_draft", { prId, comments }),
+  interdiff: (fromRevision: number, toRevision: number) =>
+    call<FileDiffT[]>("interdiff", { fromRevision, toRevision }),
 };
 
 export function onCoreEvent(cb: (e: CoreEvent) => void): Promise<UnlistenFn> {

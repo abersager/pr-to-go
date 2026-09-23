@@ -8,6 +8,7 @@ import { Conversation } from "./Conversation";
 import { FilesView } from "./FilesView";
 import { openExternal } from "./Html";
 import { SyncBadge } from "./Inbox";
+import { RebaseDialog } from "./RebaseDialog";
 import { ReviewPanel } from "./ReviewPanel";
 
 export function PrView({
@@ -33,6 +34,7 @@ export function PrView({
   const [draft, setDraft] = useState<Draft | null>(null);
   const [panel, setPanel] = useState(openReview);
   const [notice, setNotice] = useState<string | null>(null);
+  const [rebasing, setRebasing] = useState(false);
   const revisionId = pr?.revision?.id;
 
   useEffect(() => {
@@ -75,7 +77,15 @@ export function PrView({
   };
 
   const draftCount = draft?.comments.length ?? 0;
-  const moved = draft && pr.revision && draft.basisRevisionId !== pr.revision.id;
+  // Comments written on an earlier version of the PR.
+  const stale = (draft?.comments ?? []).filter(
+    (c) =>
+      c.kind === "thread" &&
+      pr.revision &&
+      c.anchorRevisionId !== pr.revision.id &&
+      c.resolution !== "drop" &&
+      c.resolution !== "to_summary",
+  ).length;
 
   return (
     <div className={`pr-view ${panel ? "with-panel" : ""}`}>
@@ -115,11 +125,25 @@ export function PrView({
               {draft && draft.status !== "draft" && <span className="small"> · {draft.status.replace("_", " ")}</span>}
             </button>
           </div>
-          {moved && (
-            <p className="notice warn small">
-              The pull request changed since you started this review. Your comments stay attached to the version you
-              reviewed; you'll choose where they go before anything is sent.
-            </p>
+          {stale > 0 && (
+            <div className="notice warn small rebase-banner">
+              <span>
+                The pull request changed since you started this review. {stale}{" "}
+                {stale === 1 ? "comment is" : "comments are"} still attached to the earlier version
+                {draft?.status === "draft" ? "." : "; you'll choose where they go before anything is sent."}
+              </span>
+              {draft?.status === "draft" && (
+                <button onClick={() => setRebasing(true)}>Move to this version…</button>
+              )}
+            </div>
+          )}
+          {rebasing && pr.revision && (
+            <RebaseDialog
+              prId={pr.id}
+              currentRevision={pr.revision.id}
+              onDraft={onDraft}
+              onClose={() => setRebasing(false)}
+            />
           )}
           {notice && <p className="notice small">{notice}</p>}
           <nav className="tabs">
