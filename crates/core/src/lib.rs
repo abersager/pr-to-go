@@ -3,12 +3,14 @@
 
 pub mod auth;
 pub mod blobstore;
+pub mod checks;
 pub mod clock;
 pub mod commands;
 pub mod db;
 pub mod diff;
 pub mod drafts;
 pub mod error;
+pub mod generated;
 pub mod github;
 pub mod inbox;
 pub mod outbox;

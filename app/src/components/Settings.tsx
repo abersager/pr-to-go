@@ -103,6 +103,7 @@ export function Settings({ onClose, onChanged }: { onClose: () => void; onChange
           </button>
         </form>
         {error && <p className="error small">{error}</p>}
+        <GeneratedPatterns onChanged={onChanged} />
         <h3 className="small">Storage</h3>
         <p className="small">
           {readiness.data ? `${bytes(readiness.data.bytes)} used.` : "…"}{" "}
@@ -132,5 +133,48 @@ export function Settings({ onClose, onChanged }: { onClose: () => void; onChange
         )}
       </div>
     </div>
+  );
+}
+
+function GeneratedPatterns({ onChanged }: { onChanged: () => void }) {
+  const current = useAsync(() => api.generatedPatterns(), []);
+  const [text, setText] = useState<string | null>(null);
+  const [saved, setSaved] = useState(false);
+  const value = text ?? current.data ?? "";
+  return (
+    <>
+      <h3 className="small">Generated files</h3>
+      <p className="small muted">
+        Their diffs start collapsed: lockfiles, minified files and anything marked <code>linguist-generated</code> in
+        the repository's <code>.gitattributes</code>. Add your own patterns, one per line, or <code>!pattern</code> to
+        always show a file.
+      </p>
+      <form
+        className="patterns-form"
+        onSubmit={async (e) => {
+          e.preventDefault();
+          await api.setGeneratedPatterns(value);
+          setText(null);
+          current.reload();
+          setSaved(true);
+          onChanged();
+        }}
+      >
+        <textarea
+          rows={3}
+          aria-label="Generated file patterns"
+          value={value}
+          placeholder={"docs/api/**\n!Cargo.lock"}
+          onChange={(e) => {
+            setText(e.target.value);
+            setSaved(false);
+          }}
+        />
+        <button type="submit" disabled={text === null}>
+          Save
+        </button>
+        {saved && <span className="muted small">Saved</span>}
+      </form>
+    </>
   );
 }

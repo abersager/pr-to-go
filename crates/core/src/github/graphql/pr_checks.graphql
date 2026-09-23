@@ -1,0 +1,35 @@
+# Only the head commit's checks, for re-polling while they're pending. The
+# rollup selection matches PullRequestDetails.
+query PrChecks($id: ID!) {
+  node(id: $id) {
+    ... on PullRequest {
+      lastCommit: commits(last: 1) {
+        nodes {
+          commit {
+            oid
+            statusCheckRollup {
+              state
+              contexts(first: 100) {
+                nodes {
+                  __typename
+                  ... on CheckRun {
+                    name
+                    status
+                    conclusion
+                    detailsUrl
+                  }
+                  ... on StatusContext {
+                    context
+                    state
+                    targetUrl
+                    description
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

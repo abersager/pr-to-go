@@ -543,9 +543,10 @@ impl Core {
     /// when kicked.
     pub(crate) async fn inbox_loop(&self, every: Duration) {
         loop {
-            let has_subs = self.subscriptions().map(|s| s.iter().any(|x| x.enabled)).unwrap_or(false);
-            if has_subs
-                && self.gh.has_token()
+            // Runs without subscriptions too: PRs added by hand still need
+            // syncing when they go stale (for example after a checks poll
+            // saw a new head).
+            if self.gh.has_token()
                 && !self.gh.is_work_offline()
                 && let Err(e) = self.sync_inbox().await
             {

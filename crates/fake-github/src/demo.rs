@@ -217,6 +217,7 @@ pub fn build(w: &mut World) -> Demo {
             ("web/settings.tsx", Some(SETTINGS_TSX.as_bytes())),
             ("web/theme.css", Some(THEME_CSS.as_bytes())),
             ("tests/fixtures/widgets.json", Some(fixtures(20).as_bytes())),
+            (".gitattributes", Some(b"tests/fixtures/*.json linguist-generated\n")),
         ],
         "Initial commit",
     );

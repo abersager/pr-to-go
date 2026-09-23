@@ -122,6 +122,8 @@ pub struct FileEntry {
     pub content_status: String,
     pub head_blob_oid: Option<String>,
     pub viewed: bool,
+    /// Generated (lockfiles, `linguist-generated`, ...): shown collapsed.
+    pub generated: bool,
 }
 
 #[derive(Serialize, Clone, Debug)]
@@ -368,9 +370,20 @@ pub fn revision_files(c: &Connection, pr_id: i64, rev_id: i64) -> Result<Vec<Fil
                 content_status: r.get(6)?,
                 head_blob_oid: r.get(7)?,
                 viewed: r.get::<_, Option<bool>>(8)?.unwrap_or(false),
+                generated: false,
             })
         })?
         .collect::<Result<Vec<_>, _>>()?;
+    let attrs: Option<String> =
+        c.query_row("SELECT gitattributes FROM pr_revision WHERE id = ?1", [rev_id], |r| r.get(0))?;
+    let user: Option<String> = c
+        .query_row("SELECT value FROM setting WHERE key = ?1", [crate::generated::SETTING], |r| r.get(0))
+        .optional()?;
+    let generated = crate::generated::Generated::new(attrs.as_deref(), user.as_deref());
+    let mut rows = rows;
+    for f in &mut rows {
+        f.generated = generated.is_generated(&f.path);
+    }
     Ok(rows)
 }
 

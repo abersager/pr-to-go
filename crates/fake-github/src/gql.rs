@@ -19,6 +19,7 @@ pub fn handle(w: &mut World, viewer: &str, op: &str, vars: &Value) -> GqlResult 
         "Viewer" => Ok(json!({ "viewer": { "id": w.users[viewer], "login": viewer } })),
         "PullRequestDetails" => pull_request_details(w, viewer, vars),
         "PrCommits" => pr_commits(w, vars),
+        "PrChecks" => pr_checks(w, vars),
         "PrReviews" => pr_reviews(w, viewer, vars),
         "PrThreads" => pr_threads(w, viewer, vars),
         "ThreadComments" => thread_comments(w, viewer, vars),
@@ -188,22 +189,9 @@ fn pull_request_details(w: &mut World, viewer: &str, vars: &Value) -> GqlResult 
     let base_tip = &r.branches[&pr.base_ref];
     let mb = r.merge_base(base_tip, &pr.head_oid).expect("merge base");
     let files = r.diff(&mb, &pr.head_oid, limit);
-    let rollup = r.checks.get(&pr.head_oid).map(|cs| {
-        let state = if cs.iter().any(|c| c.conclusion.as_deref() == Some("FAILURE")) {
-            "FAILURE"
-        } else if cs.iter().any(|c| c.status != "COMPLETED") {
-            "PENDING"
-        } else {
-            "SUCCESS"
-        };
-        json!({
-            "state": state,
-            "contexts": { "nodes": cs.iter().map(|c| json!({
-                "__typename": "CheckRun", "name": c.name, "status": c.status,
-                "conclusion": c.conclusion, "detailsUrl": format!("{}/checks/{}", w.base_url, c.name),
-            })).collect::<Vec<_>>() }
-        })
-    });
+    let rollup = rollup(w, r, &pr.head_oid);
+    let gitattributes =
+        r.file_text(&pr.head_oid, ".gitattributes").map(|text| json!({ "object": { "text": text } }));
     let latest: std::collections::BTreeMap<&str, &str> = pr
         .reviews
         .iter()
@@ -247,9 +235,38 @@ fn pull_request_details(w: &mut World, viewer: &str, vars: &Value) -> GqlResult 
             "changedFiles": files.len(),
             "createdAt": pr.created_at,
             "updatedAt": pr.updated_at,
-            "lastCommit": { "nodes": [ { "commit": { "oid": pr.head_oid, "statusCheckRollup": rollup } } ] },
+            "lastCommit": { "nodes": [ { "commit": {
+                "oid": pr.head_oid, "statusCheckRollup": rollup, "gitattributes": gitattributes,
+            } } ] },
         }
     }}))
+}
+
+fn rollup(w: &World, r: &Repo, oid: &str) -> Option<Value> {
+    r.checks.get(oid).map(|cs| {
+        let state = if cs.iter().any(|c| c.conclusion.as_deref() == Some("FAILURE")) {
+            "FAILURE"
+        } else if cs.iter().any(|c| c.status != "COMPLETED") {
+            "PENDING"
+        } else {
+            "SUCCESS"
+        };
+        json!({
+            "state": state,
+            "contexts": { "nodes": cs.iter().map(|c| json!({
+                "__typename": "CheckRun", "name": c.name, "status": c.status,
+                "conclusion": c.conclusion, "detailsUrl": format!("{}/checks/{}", w.base_url, c.name),
+            })).collect::<Vec<_>>() }
+        })
+    })
+}
+
+fn pr_checks(w: &mut World, vars: &Value) -> GqlResult {
+    let (r, pr) = find_pr(w, s(vars, "id"))?;
+    let rollup = rollup(w, r, &pr.head_oid);
+    Ok(json!({ "node": { "lastCommit": { "nodes": [
+        { "commit": { "oid": pr.head_oid, "statusCheckRollup": rollup } }
+    ] } } }))
 }
 
 fn pr_commits(w: &mut World, vars: &Value) -> GqlResult {

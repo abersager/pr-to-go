@@ -61,6 +61,8 @@ export type FileEntry = {
   contentStatus: "ok" | "missing" | "too_large" | "binary_skipped";
   headBlobOid: string | null;
   viewed: boolean;
+  /** Lockfiles, `linguist-generated` and the user's patterns: starts collapsed. */
+  generated: boolean;
 };
 
 export type CommitEntry = {

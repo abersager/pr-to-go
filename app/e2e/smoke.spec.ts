@@ -40,10 +40,16 @@ test("review a synced PR: description, checks, diff, threads, context", async ({
   await page.getByRole("button", { name: "Unified" }).click();
   await expect(page.locator(".line.unified").first()).toBeVisible();
 
-  // The generated file GitHub sent no patch for: local diff, comments off.
+  // The generated file (.gitattributes) GitHub sent no patch for: collapsed
+  // at first; shown, it's a local diff with comments off.
   await page.getByRole("button", { name: "Regenerate API fixtures" }).or(page.getByText("Regenerate API fixtures")).first().click();
   await page.getByRole("button", { name: /^Files/ }).click();
-  await page.locator(".file-list li", { hasText: "widgets.json" }).click();
+  const fixtures = page.locator(".file-list li", { hasText: "widgets.json" });
+  await expect(fixtures.locator(".tag")).toHaveText("generated");
+  await fixtures.click();
+  await expect(page.locator(".generated-note")).toContainText("generated");
+  await page.screenshot({ path: "test-results/generated.png" });
+  await page.getByRole("button", { name: "Show diff" }).click();
   await expect(page.locator(".notice.warn")).toContainText("computed locally");
 });
 

@@ -229,6 +229,15 @@ impl Core {
             "sync_inbox" => out(self.sync_inbox().await?),
             "readiness" => out(self.readiness()?),
             "gc" => out(self.gc()?),
+            "generated_patterns" => out(self.generated_patterns()?),
+            "set_generated_patterns" => {
+                #[derive(serde::Deserialize)]
+                struct A {
+                    patterns: String,
+                }
+                let a: A = args(a)?;
+                out(self.set_generated_patterns(&a.patterns)?)
+            }
             _ => Err(Error::Invalid(format!("unknown command {cmd}"))),
         }
     }

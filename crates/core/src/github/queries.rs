@@ -12,6 +12,7 @@ pub const PR_REVIEWS: &str = include_str!("graphql/pr_reviews.graphql");
 pub const PR_THREADS: &str = include_str!("graphql/pr_threads.graphql");
 pub const THREAD_COMMENTS: &str = include_str!("graphql/thread_comments.graphql");
 pub const PR_ISSUE_COMMENTS: &str = include_str!("graphql/pr_issue_comments.graphql");
+pub const PR_CHECKS: &str = include_str!("graphql/pr_checks.graphql");
 
 /// Builds the `Blobs` query for `n` expressions (`"<oid>:<path>"`), passed as
 /// variables `$e0..$e{n-1}` and returned under aliases `b0..b{n-1}`.
@@ -127,6 +128,20 @@ pub struct CommitNodeWithChecks {
 pub struct CommitWithChecks {
     pub oid: String,
     pub status_check_rollup: Option<Rollup>,
+    /// Only asked for by PullRequestDetails.
+    #[serde(default)]
+    pub gitattributes: Option<TreeEntry>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct TreeEntry {
+    pub object: Option<BlobText>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct BlobText {
+    #[serde(default)]
+    pub text: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -149,6 +164,12 @@ pub enum CheckContext {
 #[derive(Debug, Deserialize)]
 pub struct NodeData<T> {
     pub node: Option<T>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PrChecksNode {
+    pub last_commit: Connection<CommitNodeWithChecks>,
 }
 
 #[derive(Debug, Deserialize)]

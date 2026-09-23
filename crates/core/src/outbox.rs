@@ -471,7 +471,7 @@ impl Core {
     /// The background worker: the outbox, and the inbox every 15 minutes.
     /// Spawn this on the host's runtime; it never returns.
     pub async fn run_background(self: std::sync::Arc<Self>) {
-        tokio::join!(self.outbox_loop(), self.inbox_loop(Duration::from_secs(15 * 60)));
+        tokio::join!(self.outbox_loop(), self.inbox_loop(Duration::from_secs(15 * 60)), self.checks_loop());
     }
 
     async fn outbox_loop(&self) {

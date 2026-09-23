@@ -286,3 +286,27 @@ async fn blob_batches_arriving_out_of_order_land_in_the_right_files() {
         assert_eq!(diff.head_text, expected, "{}", f.path);
     }
 }
+
+#[tokio::test]
+async fn generated_files_come_from_defaults_gitattributes_and_settings() {
+    let h = harness().await;
+    let s = h.fake.with(|w| {
+        let s = seed(w);
+        let c = w.commit(
+            REPO,
+            Some(&s.head),
+            &[(".gitattributes", Some("src/new.rs linguist-generated\n")), ("Cargo.lock", Some("# lock\n"))],
+            "Mark generated files",
+        );
+        w.push(REPO, s.number, &c);
+        s
+    });
+    let pr_id = h.core.add_pr(&pr_url(s.number)).await.unwrap();
+    let generated = |h: &Harness| -> Vec<String> {
+        h.core.get_pr(pr_id).unwrap().files.into_iter().filter(|f| f.generated).map(|f| f.path).collect()
+    };
+    assert_eq!(generated(&h), ["Cargo.lock", "src/new.rs"]);
+
+    h.core.set_generated_patterns("!Cargo.lock\nsrc/lib.rs\n").unwrap();
+    assert_eq!(generated(&h), ["src/lib.rs", "src/new.rs"]);
+}

@@ -273,6 +273,10 @@ async fn sync_once(ctx: &SyncCtx, r: &PrRef) -> Result<Option<SyncOutcome>> {
             }
             (None, None) => unreachable!(),
         };
+        let gitattributes = pr.last_commit.nodes.first().and_then(|n| {
+            n.commit.gitattributes.as_ref().and_then(|t| t.object.as_ref()).and_then(|o| o.text.clone())
+        });
+        tx.execute("UPDATE pr_revision SET gitattributes = ?2 WHERE id = ?1", params![rev_id, gitattributes])?;
         tx.execute(
             "INSERT INTO check_snapshot (revision_id, captured_at, rollup_state, contexts) VALUES (?1, ?2, ?3, ?4)
              ON CONFLICT (revision_id) DO UPDATE SET captured_at = excluded.captured_at,
@@ -293,7 +297,7 @@ async fn sync_once(ctx: &SyncCtx, r: &PrRef) -> Result<Option<SyncOutcome>> {
     Ok(Some(outcome))
 }
 
-fn checks_json(rollup: Option<&Rollup>) -> String {
+pub(crate) fn checks_json(rollup: Option<&Rollup>) -> String {
     let contexts: Vec<serde_json::Value> = rollup
         .map(|r| {
             r.contexts
