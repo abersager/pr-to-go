@@ -14,7 +14,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
-      - run: sudo apt-get update && sudo apt-get install -y libsecret-1-dev
+      - run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev pkg-config
       - run: rustup show # installs the toolchain pinned in rust-toolchain.toml
       - uses: Swatinem/rust-cache@v2
       - run: cargo fmt --all --check
@@ -58,7 +58,7 @@ jobs:
           node-version: 22
           cache: pnpm
           cache-dependency-path: app/pnpm-lock.yaml
-      - run: sudo apt-get update && sudo apt-get install -y libsecret-1-dev
+      - run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev pkg-config
       - run: cargo build -p dev-server
       - run: pnpm install --frozen-lockfile
         working-directory: app
@@ -85,7 +85,7 @@ jobs:
       - if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libsecret-1-dev
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libdbus-1-dev pkg-config
       - run: rustup show
       - uses: Swatinem/rust-cache@v2
       - uses: pnpm/action-setup@v4

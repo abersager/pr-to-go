@@ -6,5 +6,5 @@ node_modules/
 *.sqlite
 *.sqlite-wal
 *.sqlite-shm
-/test-results/
-/playwright-report/
+/app/test-results/
+/app/playwright-report/
