@@ -14,6 +14,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
+      - run: sudo apt-get update && sudo apt-get install -y libsecret-1-dev
       - run: rustup show # installs the toolchain pinned in rust-toolchain.toml
       - uses: Swatinem/rust-cache@v2
       - run: cargo fmt --all --check
@@ -39,7 +40,37 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm typecheck
       - run: pnpm test
+      - run: pnpm validate:graphql
       - run: pnpm build
+
+  e2e:
+    name: End-to-end (UI + core + fake GitHub)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - run: rustup show
+      - uses: Swatinem/rust-cache@v2
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: app/pnpm-lock.yaml
+      - run: sudo apt-get update && sudo apt-get install -y libsecret-1-dev
+      - run: cargo build -p dev-server
+      - run: pnpm install --frozen-lockfile
+        working-directory: app
+      - run: pnpm exec playwright install --with-deps chromium
+        working-directory: app
+      - run: pnpm e2e
+        working-directory: app
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-results
+          path: app/test-results
 
   app:
     name: Desktop app (${{ matrix.os }})

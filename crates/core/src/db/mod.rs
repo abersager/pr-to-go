@@ -38,20 +38,14 @@ impl Db {
     pub fn open(path: &Path) -> Result<Db> {
         let mut writer = Connection::open(path)?;
         configure(&writer)?;
-        migrations()
-            .to_latest(&mut writer)
-            .map_err(|e| Error::Internal(format!("migration failed: {e}")))?;
+        migrations().to_latest(&mut writer).map_err(|e| Error::Internal(format!("migration failed: {e}")))?;
         let reader = Connection::open_with_flags(
             path,
             OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
         )?;
         reader.pragma_update(None, "foreign_keys", "ON")?;
         reader.busy_timeout(std::time::Duration::from_secs(5))?;
-        Ok(Db {
-            writer: Mutex::new(writer),
-            reader: Mutex::new(reader),
-            path: path.to_owned(),
-        })
+        Ok(Db { writer: Mutex::new(writer), reader: Mutex::new(reader), path: path.to_owned() })
     }
 
     pub fn path(&self) -> &Path {
@@ -77,12 +71,7 @@ impl Db {
     pub fn get_setting(&self, key: &str) -> Result<Option<String>> {
         use rusqlite::OptionalExtension;
         self.read(|c| {
-            Ok(
-                c.query_row("SELECT value FROM setting WHERE key = ?1", [key], |r| {
-                    r.get(0)
-                })
-                .optional()?,
-            )
+            Ok(c.query_row("SELECT value FROM setting WHERE key = ?1", [key], |r| r.get(0)).optional()?)
         })
     }
 
@@ -153,9 +142,8 @@ mod tests {
             Ok(())
         });
         assert!(err.is_err(), "deleting a PR with drafts must fail");
-        let n: i64 = db
-            .read(|c| Ok(c.query_row("SELECT count(*) FROM draft_review", [], |r| r.get(0))?))
-            .unwrap();
+        let n: i64 =
+            db.read(|c| Ok(c.query_row("SELECT count(*) FROM draft_review", [], |r| r.get(0))?)).unwrap();
         assert_eq!(n, 1);
     }
 

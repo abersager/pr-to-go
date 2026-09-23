@@ -1,0 +1,26 @@
+query PrCommits($id: ID!, $after: String) {
+  node(id: $id) {
+    ... on PullRequest {
+      commits(first: 100, after: $after) {
+        pageInfo {
+          hasNextPage
+          endCursor
+        }
+        nodes {
+          commit {
+            oid
+            messageHeadline
+            messageBody
+            authoredDate
+            author {
+              name
+              user {
+                login
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

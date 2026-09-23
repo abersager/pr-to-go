@@ -1,0 +1,25 @@
+query PrReviews($id: ID!, $after: String) {
+  node(id: $id) {
+    ... on PullRequest {
+      reviews(first: 50, after: $after) {
+        pageInfo {
+          hasNextPage
+          endCursor
+        }
+        nodes {
+          id
+          state
+          body
+          bodyHTML
+          submittedAt
+          author {
+            login
+          }
+          commit {
+            oid
+          }
+        }
+      }
+    }
+  }
+}

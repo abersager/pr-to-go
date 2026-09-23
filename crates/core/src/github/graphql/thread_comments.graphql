@@ -1,0 +1,33 @@
+query ThreadComments($id: ID!, $after: String) {
+  node(id: $id) {
+    ... on PullRequestReviewThread {
+      comments(first: 50, after: $after) {
+        pageInfo {
+          hasNextPage
+          endCursor
+        }
+        nodes {
+          id
+          body
+          bodyHTML
+          diffHunk
+          createdAt
+          updatedAt
+          state
+          author {
+            login
+          }
+          pullRequestReview {
+            id
+          }
+          commit {
+            oid
+          }
+          originalCommit {
+            oid
+          }
+        }
+      }
+    }
+  }
+}

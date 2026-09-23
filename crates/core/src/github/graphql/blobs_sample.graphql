@@ -1,0 +1,6 @@
+query Blobs($owner: String!, $name: String!, $e0: String!, $e1: String!) {
+  repository(owner: $owner, name: $name) {
+    b0: object(expression: $e0) { ... on Blob { oid byteSize isBinary isTruncated text } }
+    b1: object(expression: $e1) { ... on Blob { oid byteSize isBinary isTruncated text } }
+  }
+}

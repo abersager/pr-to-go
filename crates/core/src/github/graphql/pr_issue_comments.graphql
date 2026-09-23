@@ -1,0 +1,21 @@
+query PrIssueComments($id: ID!, $after: String) {
+  node(id: $id) {
+    ... on PullRequest {
+      comments(first: 50, after: $after) {
+        pageInfo {
+          hasNextPage
+          endCursor
+        }
+        nodes {
+          id
+          body
+          bodyHTML
+          createdAt
+          author {
+            login
+          }
+        }
+      }
+    }
+  }
+}

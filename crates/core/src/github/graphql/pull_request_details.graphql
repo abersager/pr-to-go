@@ -1,0 +1,67 @@
+query PullRequestDetails($owner: String!, $name: String!, $number: Int!) {
+  repository(owner: $owner, name: $name) {
+    id
+    name
+    owner {
+      login
+    }
+    isPrivate
+    isArchived
+    viewerPermission
+    pullRequest(number: $number) {
+      id
+      number
+      title
+      url
+      state
+      isDraft
+      locked
+      author {
+        login
+      }
+      baseRefName
+      headRefName
+      baseRefOid
+      headRefOid
+      headRepository {
+        nameWithOwner
+      }
+      body
+      bodyHTML
+      reviewDecision
+      viewerDidAuthor
+      additions
+      deletions
+      changedFiles
+      createdAt
+      updatedAt
+      lastCommit: commits(last: 1) {
+        nodes {
+          commit {
+            oid
+            statusCheckRollup {
+              state
+              contexts(first: 100) {
+                nodes {
+                  __typename
+                  ... on CheckRun {
+                    name
+                    status
+                    conclusion
+                    detailsUrl
+                  }
+                  ... on StatusContext {
+                    context
+                    state
+                    targetUrl
+                    description
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

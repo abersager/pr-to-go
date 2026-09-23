@@ -1,0 +1,57 @@
+query PrThreads($id: ID!, $after: String) {
+  node(id: $id) {
+    ... on PullRequest {
+      reviewThreads(first: 50, after: $after) {
+        pageInfo {
+          hasNextPage
+          endCursor
+        }
+        nodes {
+          id
+          path
+          subjectType
+          diffSide
+          line
+          startLine
+          startDiffSide
+          originalLine
+          originalStartLine
+          isOutdated
+          isResolved
+          viewerCanReply
+          comments(first: 50) {
+            pageInfo {
+              hasNextPage
+              endCursor
+            }
+            nodes {
+              ...ReviewCommentFields
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+fragment ReviewCommentFields on PullRequestReviewComment {
+  id
+  body
+  bodyHTML
+  diffHunk
+  createdAt
+  updatedAt
+  state
+  author {
+    login
+  }
+  pullRequestReview {
+    id
+  }
+  commit {
+    oid
+  }
+  originalCommit {
+    oid
+  }
+}

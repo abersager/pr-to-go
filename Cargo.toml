@@ -1,9 +1,9 @@
 [workspace]
 resolver = "3"
-members = ["crates/core", "crates/fake-github", "app/src-tauri"]
+members = ["crates/core", "crates/fake-github", "crates/dev-server", "app/src-tauri"]
 # The Tauri app embeds the built UI at compile time, so it's built separately
 # (see README). Plain `cargo test` covers the core and the fake GitHub.
-default-members = ["crates/core", "crates/fake-github"]
+default-members = ["crates/core", "crates/fake-github", "crates/dev-server"]
 
 [workspace.package]
 version = "0.1.0"

@@ -1,0 +1,22 @@
+[package]
+name = "dev-server"
+description = "Runs the core against a fake GitHub and serves the UI's API over HTTP, for browser-based development and E2E tests"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[[bin]]
+name = "prtg-dev"
+path = "src/main.rs"
+
+[dependencies]
+pr-to-go-core.workspace = true
+fake-github.workspace = true
+anyhow.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+axum = "0.8"
+tokio-stream = { version = "0.1", features = ["sync"] }
+tempfile.workspace = true

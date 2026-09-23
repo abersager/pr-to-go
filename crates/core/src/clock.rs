@@ -20,9 +20,7 @@ pub struct TestClock(Mutex<SystemTime>);
 
 impl TestClock {
     pub fn new() -> Self {
-        TestClock(Mutex::new(
-            SystemTime::UNIX_EPOCH + Duration::from_secs(1_790_000_000),
-        ))
+        TestClock(Mutex::new(SystemTime::UNIX_EPOCH + Duration::from_secs(1_790_000_000)))
     }
     pub fn advance(&self, d: Duration) {
         *self.0.lock().unwrap() += d;
