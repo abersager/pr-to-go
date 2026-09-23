@@ -22,6 +22,8 @@ serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
 tracing.workspace = true
+tracing-appender = "0.2"
+tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "env-filter", "std", "tracing-log"] }
 
 # Debug-build webview snapshots (src/dev_snapshot.rs).
 [target.'cfg(target_os = "macos")'.dependencies]

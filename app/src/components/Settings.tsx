@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { api } from "../api";
+import { api, inTauri } from "../api";
 import { ago, bytes } from "../util/format";
 import { useAsync } from "../util/useAsync";
 
@@ -122,6 +122,14 @@ export function Settings({ onClose, onChanged }: { onClose: () => void; onChange
           Pull requests that leave your inbox are removed after two weeks, unless you have a review in progress for
           them or added them by hand.
         </p>
+        {inTauri && (
+          <p className="small">
+            <button className="link" onClick={() => void api.revealLogs()}>
+              Show log files
+            </button>{" "}
+            <span className="muted">Useful when reporting a problem. They never contain your token.</span>
+          </p>
+        )}
       </div>
     </div>
   );

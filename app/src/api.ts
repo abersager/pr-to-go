@@ -100,6 +100,8 @@ export const api = {
   syncInbox: () => call<InboxSync>("sync_inbox"),
   readiness: () => call<Readiness>("readiness"),
   gc: () => call<{ revisions: number; blobs: number; prs: number; assets: number }>("gc"),
+  /** Desktop app only: shows the log folder in the file manager. */
+  revealLogs: () => invoke<void>("reveal_logs"),
 };
 
 export function onCoreEvent(cb: (e: CoreEvent) => void): Promise<UnlistenFn> {

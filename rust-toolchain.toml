@@ -1,3 +1,5 @@
 [toolchain]
 channel = "1.98.1"
-components = ["clippy", "rustfmt"]
+# llvm-tools: on macOS, release builds strip with rust-objcopy, which needs
+# the libLLVM this component ships.
+components = ["clippy", "rustfmt", "llvm-tools"]

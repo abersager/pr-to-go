@@ -114,6 +114,10 @@ pub(crate) fn log(
     outcome: &str,
     detail: Option<&str>,
 ) -> Result<()> {
+    tracing::info!(
+        "outbox review {review_id}: {step} {outcome}{}",
+        detail.map(|d| format!(" ({d})")).unwrap_or_default()
+    );
     tx.execute(
         "INSERT INTO outbox_log (draft_review_id, at, step, outcome, detail) VALUES (?1, ?2, ?3, ?4, ?5)",
         params![review_id, now, step, outcome, detail],

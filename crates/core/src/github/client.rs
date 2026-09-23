@@ -148,7 +148,9 @@ impl GitHub {
         Ok(())
     }
 
-    async fn send(&self, kind: OpKind, req: RequestBuilder) -> Result<Raw, GhError> {
+    /// Sends one request. `label` names it in the log (a GraphQL operation or
+    /// a REST path); requests are logged without headers or bodies.
+    async fn send(&self, kind: OpKind, label: &str, req: RequestBuilder) -> Result<Raw, GhError> {
         self.gate()?;
         let _permit = self.permits.acquire().await.expect("semaphore closed");
         // Space out mutations. The lock is held across the send so two
@@ -167,19 +169,37 @@ impl GitHub {
             }
             OpKind::Query => None,
         };
-        let resp = req
-            .timeout(self.cfg.request_timeout)
-            .send()
-            .await
-            .map_err(|e| classify_transport(&e, kind, false))?;
-        let status = resp.status();
-        let headers = resp.headers().clone();
-        let body = resp.bytes().await.map_err(|e| classify_transport(&e, kind, true))?.to_vec();
+        let started = Instant::now();
+        let result = async {
+            let resp = req
+                .timeout(self.cfg.request_timeout)
+                .send()
+                .await
+                .map_err(|e| classify_transport(&e, kind, false))?;
+            let status = resp.status();
+            let headers = resp.headers().clone();
+            let body = resp.bytes().await.map_err(|e| classify_transport(&e, kind, true))?.to_vec();
+            Ok(Raw { status, headers, body })
+        }
+        .await;
         if let Some(g) = last_mutation.as_mut() {
             **g = Some(Instant::now());
         }
-        self.observe_limits(&headers);
-        Ok(Raw { status, headers, body })
+        let ms = started.elapsed().as_millis();
+        match &result {
+            Ok(raw) => {
+                self.observe_limits(&raw.headers);
+                let remaining = header_u64(&raw.headers, "x-ratelimit-remaining");
+                tracing::debug!(
+                    "{kind:?} {} -> {} in {ms} ms (rate limit left: {})",
+                    redact_url(label),
+                    raw.status.as_u16(),
+                    remaining.map_or("?".into(), |r| r.to_string())
+                );
+            }
+            Err(e) => tracing::info!("{kind:?} {} failed after {ms} ms: {e}", redact_url(label)),
+        }
+        result
     }
 
     fn observe_limits(&self, headers: &HeaderMap) {
@@ -267,7 +287,7 @@ impl GitHub {
         kind: OpKind,
     ) -> Result<(Value, HeaderMap), GhError> {
         let req = self.graphql_request(op, query, &vars)?;
-        let raw = self.send(kind, req).await?;
+        let raw = self.send(kind, op, req).await?;
         self.check_status(&raw, kind)?;
         let v: Value = serde_json::from_slice(&raw.body).map_err(|_| {
             let msg = "response wasn't JSON (captive portal or proxy?)".to_string();
@@ -342,7 +362,7 @@ impl GitHub {
         if let Some((etag, _)) = &cached {
             req = req.header("If-None-Match", etag.as_str());
         }
-        let raw = self.send(OpKind::Query, req).await?;
+        let raw = self.send(OpKind::Query, path, req).await?;
         self.check_status(&raw, OpKind::Query)?;
         let body = if raw.status == StatusCode::NOT_MODIFIED {
             match cached {
@@ -387,7 +407,7 @@ impl GitHub {
     /// `Accept: application/vnd.github.raw+json`).
     pub async fn rest_get_bytes(&self, path: &str, accept: &str) -> Result<Vec<u8>, GhError> {
         let req = self.rest(path)?.header("Accept", accept);
-        let raw = self.send(OpKind::Query, req).await?;
+        let raw = self.send(OpKind::Query, path, req).await?;
         self.check_status(&raw, OpKind::Query)?;
         Ok(raw.body)
     }
@@ -408,11 +428,11 @@ impl GitHub {
             return Err(if resp.status() == StatusCode::NOT_FOUND {
                 GhError::NotFound
             } else {
-                GhError::Protocol(format!("HTTP {} for {url}", resp.status()))
+                GhError::Protocol(format!("HTTP {} for {}", resp.status(), redact_url(url)))
             });
         }
         if resp.content_length().is_some_and(|n| n as usize > max_bytes) {
-            return Err(GhError::Protocol(format!("{url} is larger than {max_bytes} bytes")));
+            return Err(GhError::Protocol(format!("{} is larger than {max_bytes} bytes", redact_url(url))));
         }
         let content_type =
             resp.headers().get("content-type").and_then(|v| v.to_str().ok()).map(str::to_owned);
@@ -420,7 +440,10 @@ impl GitHub {
         while let Some(chunk) = resp.chunk().await.map_err(|e| classify_transport(&e, OpKind::Query, true))? {
             body.extend_from_slice(&chunk);
             if body.len() > max_bytes {
-                return Err(GhError::Protocol(format!("{url} is larger than {max_bytes} bytes")));
+                return Err(GhError::Protocol(format!(
+                    "{} is larger than {max_bytes} bytes",
+                    redact_url(url)
+                )));
             }
         }
         Ok((body, content_type))
@@ -502,8 +525,17 @@ pub struct Viewer {
     pub scopes: Option<Vec<String>>,
 }
 
+/// Drops the query string and fragment: pre-signed image URLs carry a
+/// short-lived token there, and none of it helps in a log or error message.
+pub(crate) fn redact_url(url: &str) -> &str {
+    url.split(['?', '#']).next().unwrap_or(url)
+}
+
 fn classify_transport(e: &reqwest::Error, kind: OpKind, response_started: bool) -> GhError {
-    let msg = e.to_string();
+    let mut msg = e.to_string();
+    if let Some(url) = e.url() {
+        msg = msg.replace(url.as_str(), redact_url(url.as_str()));
+    }
     if e.is_connect() && !response_started {
         return GhError::Offline(msg);
     }
@@ -542,5 +574,19 @@ fn error_message(body: &[u8]) -> String {
             msg
         }
         Err(_) => String::from_utf8_lossy(body).chars().take(200).collect(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::redact_url;
+
+    #[test]
+    fn redacts_tokens_in_query_strings() {
+        assert_eq!(
+            redact_url("https://private-user-images.githubusercontent.com/1/a.png?jwt=eyJ.x.y#frag"),
+            "https://private-user-images.githubusercontent.com/1/a.png"
+        );
+        assert_eq!(redact_url("repos/acme/widgets/pulls/1/files"), "repos/acme/widgets/pulls/1/files");
     }
 }

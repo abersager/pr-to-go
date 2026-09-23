@@ -5,7 +5,7 @@ export type { Token };
 export type LineTokens = Token[];
 
 /** Files bigger than this aren't highlighted. */
-const MAX_CHARS = 500_000;
+export const HIGHLIGHT_MAX_CHARS = 500_000;
 
 let worker: Worker | null = null;
 let nextId = 1;
@@ -31,7 +31,7 @@ export function highlight(key: string, path: string, code: string): Promise<Line
   if (hit) return hit;
   const w = getWorker();
   const p =
-    !w || code.length > MAX_CHARS
+    !w || code.length > HIGHLIGHT_MAX_CHARS
       ? Promise.resolve(null)
       : new Promise<LineTokens[] | null>((resolve) => {
           const id = nextId++;

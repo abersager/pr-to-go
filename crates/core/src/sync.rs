@@ -9,6 +9,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use futures_util::{StreamExt, stream};
 use rusqlite::{OptionalExtension, Transaction, params};
 use serde::Serialize;
 use serde_json::json;
@@ -28,6 +29,9 @@ const MAX_IMAGE_BLOB: i64 = 5 * 1024 * 1024;
 const MAX_ASSET: usize = 10 * 1024 * 1024;
 const MAX_ASSETS_PER_PR: usize = 50 * 1024 * 1024;
 const BLOB_BATCH: usize = 25;
+/// Blob batches in flight at once for one PR (the client's own limit on
+/// concurrent requests still applies across all PRs).
+const BLOB_BATCHES_IN_FLIGHT: usize = 4;
 
 /// URL scheme the UI serves local images and blobs from.
 pub const ASSET_URL_PREFIX: &str = "prtg://localhost/asset/";
@@ -115,11 +119,29 @@ enum FilesResult {
 }
 
 pub async fn sync_pr(ctx: &SyncCtx, pr: &PrRef) -> Result<SyncOutcome> {
+    let started = std::time::Instant::now();
     for _ in 0..3 {
-        if let Some(outcome) = sync_once(ctx, pr).await? {
-            return Ok(outcome);
+        match sync_once(ctx, pr).await {
+            Ok(Some(outcome)) => {
+                tracing::info!(
+                    "synced {} in {} ms{}{}",
+                    pr.display(),
+                    started.elapsed().as_millis(),
+                    if outcome.head_moved { ", new revision" } else { "" },
+                    if outcome.partial { ", partial" } else { "" },
+                );
+                return Ok(outcome);
+            }
+            Ok(None) => tracing::info!("{} moved during sync; retrying", pr.display()),
+            Err(e) => {
+                tracing::info!(
+                    "sync of {} failed after {} ms: {e}",
+                    pr.display(),
+                    started.elapsed().as_millis()
+                );
+                return Err(e);
+            }
         }
-        tracing::info!("{} moved during sync; retrying", pr.display());
     }
     Err(Error::GitHub(GhError::Server(409)))
 }
@@ -641,16 +663,16 @@ async fn fetch_files(
 
     let mut partial = Vec::new();
     let mut binary: HashSet<usize> = HashSet::new();
-    for chunk in needs.chunks(BLOB_BATCH) {
-        let mut vars = serde_json::Map::new();
-        vars.insert("owner".into(), json!(r.owner));
-        vars.insert("name".into(), json!(r.name));
-        for (i, n) in chunk.iter().enumerate() {
-            vars.insert(format!("e{i}"), json!(n.expr));
-        }
-        let data: serde_json::Value = gh
-            .graphql("Blobs", &blobs_query(chunk.len()), serde_json::Value::Object(vars), OpKind::Query)
-            .await?;
+    // Batches are fetched a few at a time but handled in order, so at most a
+    // few responses are held in memory.
+    // (The futures are built up front: a closure inside the stream trips
+    // rustc's `Send` inference for the spawned sync task.)
+    let fetches: Vec<_> = needs.chunks(BLOB_BATCH).map(|chunk| fetch_blob_batch(gh, r, chunk)).collect();
+    let mut batches = stream::iter(fetches).buffered(BLOB_BATCHES_IN_FLIGHT);
+    let mut chunks = needs.chunks(BLOB_BATCH);
+    while let Some(data) = batches.next().await {
+        let data = data?;
+        let chunk = chunks.next().expect("one response per chunk");
         for (i, need) in chunk.iter().enumerate() {
             let info: Option<BlobInfo> = serde_json::from_value(data["repository"][format!("b{i}")].clone())
                 .map_err(|e| GhError::Protocol(format!("Blobs: {e}")))?;
@@ -739,6 +761,16 @@ async fn fetch_files(
         }
     }
     Ok(FilesResult::Done(files, partial))
+}
+
+async fn fetch_blob_batch(gh: &GitHub, r: &PrRef, chunk: &[BlobNeed]) -> Result<serde_json::Value> {
+    let mut vars = serde_json::Map::new();
+    vars.insert("owner".into(), json!(r.owner));
+    vars.insert("name".into(), json!(r.name));
+    for (i, n) in chunk.iter().enumerate() {
+        vars.insert(format!("e{i}"), json!(n.expr));
+    }
+    Ok(gh.graphql("Blobs", &blobs_query(chunk.len()), serde_json::Value::Object(vars), OpKind::Query).await?)
 }
 
 async fn fetch_commits(gh: &GitHub, id: &str) -> Result<Vec<CommitInfo>> {
@@ -899,7 +931,9 @@ async fn download_images(ctx: &SyncCtx, html: &[&str]) -> HashMap<String, String
                     out.insert(url, sha);
                 }
             }
-            Err(e) => tracing::warn!("couldn't download image {url}: {e}"),
+            Err(e) => {
+                tracing::warn!("couldn't download image {}: {e}", crate::github::client::redact_url(&url))
+            }
         }
     }
     out

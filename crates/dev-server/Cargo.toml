@@ -20,3 +20,4 @@ tokio.workspace = true
 axum = "0.8"
 tokio-stream = { version = "0.1", features = ["sync"] }
 tempfile.workspace = true
+tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "env-filter", "std", "ansi"] }

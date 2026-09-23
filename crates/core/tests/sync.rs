@@ -265,3 +265,24 @@ async fn token_persists_across_restart() {
     assert!(h.core.auth_status().unwrap().signed_in);
     h.core.add_pr(&pr_url(s.number)).await.unwrap();
 }
+
+#[tokio::test]
+async fn blob_batches_arriving_out_of_order_land_in_the_right_files() {
+    let h = harness().await;
+    let number = h.fake.with(|w| {
+        seed(w);
+        // ~250 blobs: ten GraphQL batches, fetched a few at a time.
+        fake_github::demo::large_pr(w, 120, 3000)
+    });
+    // Hold up the first batch so later ones finish first.
+    h.fake.with(|w| w.fault("Blobs", FaultAction::Delay(std::time::Duration::from_millis(300))));
+    let pr_id = h.core.add_pr(&pr_url(number)).await.unwrap();
+    let pr = h.core.get_pr(pr_id).unwrap();
+    let rev = pr.revision.as_ref().unwrap();
+    assert_eq!(pr.files.len(), 122);
+    for f in &pr.files {
+        let diff = h.core.file_diff(rev.id, &f.path).unwrap();
+        let expected = h.fake.with(|w| w.repo(REPO).file_text(&rev.head_oid, &f.path));
+        assert_eq!(diff.head_text, expected, "{}", f.path);
+    }
+}

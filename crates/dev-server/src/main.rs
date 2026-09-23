@@ -95,6 +95,15 @@ async fn start(fake: &FakeGitHub, demo: demo::Demo, opts: &Opts) -> anyhow::Resu
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    // Quiet by default so E2E output stays readable; `PRTOGO_LOG=debug` shows
+    // every GitHub request.
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_env("PRTOGO_LOG")
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("warn")),
+        )
+        .with_writer(std::io::stderr)
+        .init();
     let port = arg("--port").unwrap_or_else(|| "1421".into());
     let fake_port = arg("--fake-port").unwrap_or_else(|| "1422".into());
     let opts = Opts {
@@ -197,6 +206,11 @@ async fn demo_action(State(d): S, Path(action): Path<String>) -> Response {
                     &[],
                 );
             });
+        }
+        // A big PR for performance work: `POST /__demo/large`.
+        "large" => {
+            let number = d.fake.with(|w| demo::large_pr(w, 400, 20_000));
+            return axum::Json(serde_json::json!({ "number": number })).into_response();
         }
         _ => return (StatusCode::NOT_FOUND, "unknown demo action").into_response(),
     }

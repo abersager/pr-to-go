@@ -1,7 +1,7 @@
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { type CSSProperties, useMemo, useRef, useState } from "react";
 import { api, localUrl } from "../api";
-import { type LineTokens, type Token, useHighlight } from "../diff/highlight";
+import { HIGHLIGHT_MAX_CHARS, type LineTokens, type Token, useHighlight } from "../diff/highlight";
 import {
   type Cell,
   type ComposerAt,
@@ -404,6 +404,9 @@ export function DiffView({
       )}
       {diff.contentStatus !== "ok" && diff.contentStatus !== "binary_skipped" && (
         <p className="notice warn">The file contents aren't available offline ({diff.contentStatus.replace("_", " ")}).</p>
+      )}
+      {Math.max(diff.headText?.length ?? 0, diff.baseText?.length ?? 0) > HIGHLIGHT_MAX_CHARS && (
+        <p className="notice small">This file is too large for syntax highlighting.</p>
       )}
       {hasTop && (
         <div className="file-threads">

@@ -366,3 +366,67 @@ pub fn build(w: &mut World) -> Demo {
 
     Demo { retry_pr, dark_mode_pr, fixtures_pr }
 }
+
+/// Generated Rust-looking source: `n` lines in small functions.
+fn generated_source(seed: usize, n: usize, edit: impl Fn(usize) -> bool) -> String {
+    let mut s = String::new();
+    for i in 0..n {
+        let line = match i % 8 {
+            0 => format!("pub fn handler_{seed}_{i}(input: &Request) -> Result<Response, Error> {{"),
+            1 => format!("    let limit = input.limit.unwrap_or({});", 10 + i % 90),
+            2 => "    let items = store.query(&input.filter, limit)?;".to_string(),
+            3 => format!("    tracing::debug!(\"handler {seed}/{i}: {{}} items\", items.len());"),
+            4 => "    let body = serde_json::to_vec(&items)?;".to_string(),
+            5 => "    Ok(Response::json(body))".to_string(),
+            6 => "}".to_string(),
+            _ => String::new(),
+        };
+        if edit(i) && !line.is_empty() {
+            s.push_str(&line.replace("limit", "page_size"));
+        } else {
+            s.push_str(&line);
+        }
+        s.push('\n');
+    }
+    s
+}
+
+/// A pull request big enough to show performance problems: `files` changed
+/// files of a few hundred lines each, one file of `long_lines` lines with
+/// changes spread throughout, and a new file of `long_lines` lines. Returns
+/// the PR number.
+pub fn large_pr(w: &mut World, files: usize, long_lines: usize) -> u64 {
+    let main = w.repo(REPO).branches["main"].clone();
+    let paths: Vec<String> = (0..files).map(|i| format!("src/handlers/h{:03}/mod_{i}.rs", i / 20)).collect();
+    let before: Vec<String> = (0..files).map(|i| generated_source(i, 240, |_| false)).collect();
+    let long_path = "src/generated/routes.rs";
+    let long_before = generated_source(9999, long_lines, |_| false);
+    let mut base_files: Vec<(&str, Option<&str>)> =
+        paths.iter().zip(&before).map(|(p, s)| (p.as_str(), Some(s.as_str()))).collect();
+    base_files.push((long_path, Some(&long_before)));
+    let base = w.commit(REPO, Some(&main), &base_files, "Add generated handlers");
+    w.set_branch(REPO, "main", &base);
+
+    let after: Vec<String> =
+        (0..files).map(|i| generated_source(i, 240, |l| l % 60 == 1 || l % 97 == 3)).collect();
+    let long_after = generated_source(9999, long_lines, |l| l % 50 == 1);
+    // A new file of the same length: every line is an addition, and the
+    // patch is too big for GitHub to include.
+    let new_file = generated_source(4242, long_lines, |_| false);
+    let mut head_files: Vec<(&str, Option<&str>)> =
+        paths.iter().zip(&after).map(|(p, s)| (p.as_str(), Some(s.as_str()))).collect();
+    head_files.push((long_path, Some(&long_after)));
+    head_files.push(("src/generated/schema.rs", Some(&new_file)));
+    let head = w.commit(REPO, Some(&base), &head_files, "Rename limit to page_size everywhere");
+    let number = w.open_pr(
+        REPO,
+        "main",
+        "page-size",
+        &head,
+        "Rename limit to page_size everywhere",
+        "Mechanical rename across every handler.",
+        "alice",
+    );
+    w.request_review(REPO, number, VIEWER);
+    number
+}
