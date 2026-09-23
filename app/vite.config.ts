@@ -14,5 +14,8 @@ export default defineConfig({
     ),
   },
   build: { target: "es2022", outDir: "dist" },
+  // ES-module workers can code-split, so each Shiki grammar is its own
+  // chunk, loaded the first time a file in that language is opened.
+  worker: { format: "es" },
   test: { environment: "jsdom", exclude: ["e2e/**", "node_modules/**"] },
 });

@@ -78,7 +78,16 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-latest, ubuntu-latest, windows-latest]
+        include:
+          - os: macos-latest
+            bundles: dmg
+            artifact: target/release/bundle/dmg/*.dmg
+          - os: ubuntu-latest
+            bundles: deb
+            artifact: target/release/bundle/deb/*.deb
+          - os: windows-latest
+            bundles: nsis
+            artifact: target/release/bundle/nsis/*.exe
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v5
@@ -101,3 +110,13 @@ jobs:
       - run: pnpm build
         working-directory: app
       - run: cargo clippy -p pr-to-go-app -- -D warnings
+      # Unsigned installers, to check that every platform bundles. Signing and
+      # notarization come with the first release.
+      - run: pnpm tauri build --bundles ${{ matrix.bundles }}
+        working-directory: app
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pr-to-go-${{ runner.os }}
+          path: ${{ matrix.artifact }}
+          if-no-files-found: error
+          retention-days: 14
