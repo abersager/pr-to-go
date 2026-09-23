@@ -678,3 +678,25 @@ async fn an_unconfirmed_step_blocks_editing_until_checked() {
     assert_eq!(drain(&h, pr).await, "submitted");
     assert_everything_posted_once(&h, s.number);
 }
+
+#[tokio::test]
+async fn background_sync_leaves_the_last_of_the_rate_limit_for_the_outbox() {
+    let (h, pr, rev, s) = setup().await;
+    h.core.add_draft_comment(pr, line(rev, "src/lib.rs", Side::Right, 5, "Why this name?")).unwrap();
+    h.core.queue_review(pr).unwrap();
+
+    // GitHub says the GraphQL budget is nearly spent: sync stops...
+    h.fake.with(|w| w.graphql_remaining = 150);
+    let err = h.core.sync_pr(pr).await.unwrap_err();
+    assert!(
+        matches!(err, pr_to_go_core::Error::GitHub(pr_to_go_core::github::GhError::RateLimited { .. })),
+        "{err:?}"
+    );
+    h.fake.clear_log();
+    assert!(h.core.sync_pr(pr).await.is_err());
+    assert!(!h.fake.log().iter().any(|l| l == "PullRequestDetails"), "{:?}", h.fake.log());
+
+    // ...but the outbox may spend what's left.
+    assert_eq!(drain(&h, pr).await, "submitted");
+    assert_eq!(on_github(&h, s.number).0.len(), 1);
+}

@@ -5,6 +5,8 @@
 //! to retry) and [`GhError::Ambiguous`] (a mutation may have been applied, so
 //! the outbox must check the server before retrying).
 
+use std::collections::HashMap;
+use std::future::Future;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -41,6 +43,46 @@ impl Default for GitHubConfig {
     }
 }
 
+/// Background work stops this far above zero of GitHub's GraphQL budget, so
+/// queued reviews can still be sent when a big sync has used up the rest.
+pub const OUTBOX_RESERVE: u64 = 200;
+
+tokio::task_local! {
+    static OUTBOX_WORK: ();
+}
+
+/// Runs `f` as outbox work, which may spend the reserved budget.
+pub async fn with_outbox_priority<F: Future>(f: F) -> F::Output {
+    OUTBOX_WORK.scope((), f).await
+}
+
+fn is_outbox_work() -> bool {
+    OUTBOX_WORK.try_with(|_| ()).is_ok()
+}
+
+fn epoch_now() -> u64 {
+    SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs()
+}
+
+/// GitHub's separate budgets, as named by `x-ratelimit-resource`.
+#[derive(Clone, Copy)]
+enum Resource {
+    GraphQl,
+    Core,
+    /// Not the API (images on other hosts): no budget.
+    None,
+}
+
+impl Resource {
+    fn name(self) -> Option<&'static str> {
+        match self {
+            Resource::GraphQl => Some("graphql"),
+            Resource::Core => Some("core"),
+            Resource::None => None,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum OpKind {
     Query,
@@ -53,8 +95,8 @@ struct LimitState {
     blocked_until: Option<Instant>,
     /// Consecutive secondary rate limits without a Retry-After header.
     secondary_streak: u32,
-    remaining: Option<u64>,
-    reset_epoch: Option<u64>,
+    /// By resource (`graphql`, `core`, ...).
+    budgets: HashMap<String, RateBudget>,
 }
 
 /// Rate-limit budget as last reported by GitHub.
@@ -122,16 +164,16 @@ impl GitHub {
         self.work_offline.load(Ordering::SeqCst)
     }
 
+    /// The GraphQL budget, which almost everything we do spends.
     pub fn budget(&self) -> RateBudget {
-        let l = self.limits.lock().unwrap();
-        RateBudget { remaining: l.remaining, reset_epoch: l.reset_epoch }
+        self.limits.lock().unwrap().budgets.get("graphql").copied().unwrap_or_default()
     }
 
     fn token(&self) -> Result<String, GhError> {
         self.token.read().unwrap().clone().ok_or(GhError::NoToken)
     }
 
-    fn gate(&self) -> Result<(), GhError> {
+    fn gate(&self, resource: Resource) -> Result<(), GhError> {
         if self.is_work_offline() {
             return Err(GhError::Offline("working offline".into()));
         }
@@ -145,13 +187,30 @@ impl GitHub {
                 });
             }
         }
+        // Keep the last of the GraphQL budget for sending reviews.
+        if let Some(name) = resource.name()
+            && name == "graphql"
+            && !is_outbox_work()
+            && let Some(b) = l.budgets.get(name)
+            && b.remaining.is_some_and(|r| r < OUTBOX_RESERVE)
+            && let Some(reset) = b.reset_epoch
+            && reset > epoch_now()
+        {
+            return Err(GhError::RateLimited { retry_after_s: reset - epoch_now(), secondary: false });
+        }
         Ok(())
     }
 
     /// Sends one request. `label` names it in the log (a GraphQL operation or
     /// a REST path); requests are logged without headers or bodies.
-    async fn send(&self, kind: OpKind, label: &str, req: RequestBuilder) -> Result<Raw, GhError> {
-        self.gate()?;
+    async fn send(
+        &self,
+        kind: OpKind,
+        resource: Resource,
+        label: &str,
+        req: RequestBuilder,
+    ) -> Result<Raw, GhError> {
+        self.gate(resource)?;
         let _permit = self.permits.acquire().await.expect("semaphore closed");
         // Space out mutations. The lock is held across the send so two
         // mutations can't race past the spacing check.
@@ -188,7 +247,7 @@ impl GitHub {
         let ms = started.elapsed().as_millis();
         match &result {
             Ok(raw) => {
-                self.observe_limits(&raw.headers);
+                self.observe_limits(&raw.headers, resource);
                 let remaining = header_u64(&raw.headers, "x-ratelimit-remaining");
                 tracing::debug!(
                     "{kind:?} {} -> {} in {ms} ms (rate limit left: {})",
@@ -202,14 +261,17 @@ impl GitHub {
         result
     }
 
-    fn observe_limits(&self, headers: &HeaderMap) {
-        let mut l = self.limits.lock().unwrap();
-        if let Some(r) = header_u64(headers, "x-ratelimit-remaining") {
-            l.remaining = Some(r);
-        }
-        if let Some(r) = header_u64(headers, "x-ratelimit-reset") {
-            l.reset_epoch = Some(r);
-        }
+    fn observe_limits(&self, headers: &HeaderMap, resource: Resource) {
+        let name = headers.get("x-ratelimit-resource").and_then(|v| v.to_str().ok()).or(resource.name());
+        let (Some(name), Some(remaining)) = (name, header_u64(headers, "x-ratelimit-remaining")) else {
+            return;
+        };
+        let reset_epoch = header_u64(headers, "x-ratelimit-reset");
+        self.limits
+            .lock()
+            .unwrap()
+            .budgets
+            .insert(name.into(), RateBudget { remaining: Some(remaining), reset_epoch });
     }
 
     /// Classifies a non-2xx response. Rate limits also block further requests
@@ -287,7 +349,7 @@ impl GitHub {
         kind: OpKind,
     ) -> Result<(Value, HeaderMap), GhError> {
         let req = self.graphql_request(op, query, &vars)?;
-        let raw = self.send(kind, op, req).await?;
+        let raw = self.send(kind, Resource::GraphQl, op, req).await?;
         self.check_status(&raw, kind)?;
         let v: Value = serde_json::from_slice(&raw.body).map_err(|_| {
             let msg = "response wasn't JSON (captive portal or proxy?)".to_string();
@@ -362,7 +424,7 @@ impl GitHub {
         if let Some((etag, _)) = &cached {
             req = req.header("If-None-Match", etag.as_str());
         }
-        let raw = self.send(OpKind::Query, path, req).await?;
+        let raw = self.send(OpKind::Query, Resource::Core, path, req).await?;
         self.check_status(&raw, OpKind::Query)?;
         let body = if raw.status == StatusCode::NOT_MODIFIED {
             match cached {
@@ -407,7 +469,7 @@ impl GitHub {
     /// `Accept: application/vnd.github.raw+json`).
     pub async fn rest_get_bytes(&self, path: &str, accept: &str) -> Result<Vec<u8>, GhError> {
         let req = self.rest(path)?.header("Accept", accept);
-        let raw = self.send(OpKind::Query, path, req).await?;
+        let raw = self.send(OpKind::Query, Resource::Core, path, req).await?;
         self.check_status(&raw, OpKind::Query)?;
         Ok(raw.body)
     }
@@ -415,7 +477,7 @@ impl GitHub {
     /// Downloads a public or pre-signed URL (images in PR bodies). Never sends
     /// the token: these URLs point at other hosts.
     pub async fn download(&self, url: &str, max_bytes: usize) -> Result<(Vec<u8>, Option<String>), GhError> {
-        self.gate()?;
+        self.gate(Resource::None)?;
         let _permit = self.permits.acquire().await.expect("semaphore closed");
         let mut resp = self
             .http
@@ -453,9 +515,17 @@ impl GitHub {
     /// count against the rate limit. A captive portal fails the JSON check.
     pub async fn probe(&self) -> Result<RateBudget, GhError> {
         let v: Value = self.rest_get_json("rate_limit", false).await?;
-        if v.get("resources").is_none() {
+        let Some(resources) = v.get("resources").and_then(|r| r.as_object()) else {
             return Err(GhError::Offline("unexpected /rate_limit response".into()));
+        };
+        let mut l = self.limits.lock().unwrap();
+        for (name, r) in resources {
+            if let Some(remaining) = r.get("remaining").and_then(|x| x.as_u64()) {
+                let reset_epoch = r.get("reset").and_then(|x| x.as_u64());
+                l.budgets.insert(name.clone(), RateBudget { remaining: Some(remaining), reset_epoch });
+            }
         }
+        drop(l);
         Ok(self.budget())
     }
 

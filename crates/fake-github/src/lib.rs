@@ -133,9 +133,15 @@ pub(crate) fn authed(w: &Shared, headers: &HeaderMap) -> Option<String> {
     w.lock().unwrap().tokens.get(token).cloned()
 }
 
-pub(crate) fn rate_headers(mut r: Response) -> Response {
+/// REST responses: the `core` budget, never low.
+pub(crate) fn rate_headers(r: Response) -> Response {
+    budget_headers(r, "core", 4999)
+}
+
+fn budget_headers(mut r: Response, resource: &str, remaining: u64) -> Response {
     let h = r.headers_mut();
-    h.insert("x-ratelimit-remaining", "4999".parse().unwrap());
+    h.insert("x-ratelimit-resource", resource.parse().unwrap());
+    h.insert("x-ratelimit-remaining", remaining.to_string().parse().unwrap());
     h.insert("x-ratelimit-reset", "4102444800".parse().unwrap());
     h.insert("x-oauth-scopes", "repo, read:org".parse().unwrap());
     r
@@ -218,7 +224,10 @@ async fn graphql(State(w): State<Shared>, headers: HeaderMap, body: Bytes) -> Re
     if let Some(r) = apply_fault_before(&w, &fault).await {
         return r;
     }
-    let result = gql::handle(&mut w.lock().unwrap(), &viewer, &op, &vars);
+    let (result, remaining) = {
+        let mut g = w.lock().unwrap();
+        (gql::handle(&mut g, &viewer, &op, &vars), g.graphql_remaining)
+    };
     let body = match result {
         Ok(data) => json!({ "data": data }),
         Err(e) => {
@@ -230,5 +239,5 @@ async fn graphql(State(w): State<Shared>, headers: HeaderMap, body: Bytes) -> Re
             json!({ "data": null, "errors": [ { "type": ty, "message": msg } ] })
         }
     };
-    apply_fault_after(fault, rate_headers(axum::Json(body).into_response())).await
+    apply_fault_after(fault, budget_headers(axum::Json(body).into_response(), "graphql", remaining)).await
 }

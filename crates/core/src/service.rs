@@ -5,6 +5,7 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use rusqlite::{OptionalExtension, params};
 use serde::Serialize;
@@ -77,16 +78,26 @@ pub struct Connectivity {
     pub rate_remaining: Option<u64>,
 }
 
+/// Reads the gh CLI's token (replaceable in tests).
+pub type GhCli = Arc<dyn Fn() -> Result<String> + Send + Sync>;
+
 pub struct CoreOptions {
     pub data_dir: PathBuf,
     pub github: GitHubConfig,
     pub secrets: Arc<dyn SecretStore>,
     pub clock: Arc<dyn Clock>,
+    pub gh_cli: GhCli,
 }
 
 impl CoreOptions {
     pub fn new(data_dir: PathBuf, secrets: Arc<dyn SecretStore>) -> Self {
-        CoreOptions { data_dir, github: GitHubConfig::default(), secrets, clock: Arc::new(SystemClock) }
+        CoreOptions {
+            data_dir,
+            github: GitHubConfig::default(),
+            secrets,
+            clock: Arc::new(SystemClock),
+            gh_cli: Arc::new(crate::auth::gh_cli_token),
+        }
     }
 }
 
@@ -105,6 +116,9 @@ pub struct Core {
     pub(crate) outbox_busy: Mutex<std::collections::HashSet<i64>>,
     online: Mutex<Option<bool>>,
     syncing: Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
+    gh_cli: GhCli,
+    /// When `recover_auth` last asked gh for a token.
+    auth_recovery_at: Mutex<Option<std::time::SystemTime>>,
 }
 
 impl Core {
@@ -130,6 +144,8 @@ impl Core {
             outbox_busy: Mutex::new(Default::default()),
             online: Mutex::new(None),
             syncing: Mutex::new(HashMap::new()),
+            gh_cli: opts.gh_cli,
+            auth_recovery_at: Mutex::new(None),
         }))
     }
 
@@ -223,16 +239,71 @@ impl Core {
         })?;
         if switched {
             self.gh.clear_etags();
+        } else {
+            // Same account, working token: reviews stopped by a 401 can go.
+            self.requeue_after_auth()?;
         }
         self.set_online(Some(true), None);
         self.auth_status()
     }
 
     pub async fn sign_in_with_gh(&self) -> Result<AuthStatus> {
-        let token = tokio::task::spawn_blocking(crate::auth::gh_cli_token)
-            .await
-            .map_err(|e| Error::Internal(e.to_string()))??;
+        let gh = self.gh_cli.clone();
+        let token =
+            tokio::task::spawn_blocking(move || gh()).await.map_err(|e| Error::Internal(e.to_string()))??;
         self.sign_in(&token, "gh").await
+    }
+
+    /// After a 401 with a token imported from the gh CLI: gh may hold a newer
+    /// one (after `gh auth login` or `gh auth refresh`). Adopts it if it
+    /// belongs to the same GitHub account (a review must never go out as
+    /// someone else) and returns true. Asks gh at most once a minute.
+    pub(crate) async fn recover_auth(&self) -> bool {
+        let account: Option<(String, String)> = self
+            .db
+            .read(|c| {
+                Ok(c.query_row("SELECT node_id, token_source FROM account LIMIT 1", [], |r| {
+                    Ok((r.get(0)?, r.get(1)?))
+                })
+                .optional()?)
+            })
+            .ok()
+            .flatten();
+        let Some((node_id, source)) = account else { return false };
+        if source != "gh" {
+            return false;
+        }
+        {
+            let now = self.clock.now();
+            let mut last = self.auth_recovery_at.lock().unwrap();
+            if last.is_some_and(|t| now.duration_since(t).unwrap_or_default() < Duration::from_secs(60)) {
+                return false;
+            }
+            *last = Some(now);
+        }
+        let gh = self.gh_cli.clone();
+        let Ok(Ok(token)) = tokio::task::spawn_blocking(move || gh()).await else { return false };
+        let previous = self.secrets.get().ok().flatten();
+        if previous.as_deref() == Some(token.as_str()) {
+            return false;
+        }
+        self.gh.set_token(Some(token.clone()));
+        match self.gh.viewer().await {
+            Ok(v) if v.node_id == node_id => {
+                if let Err(e) = self.secrets.set(&token) {
+                    tracing::warn!("couldn't save the new token: {e}");
+                }
+                tracing::info!("re-imported the GitHub token from the gh CLI");
+                if let Err(e) = self.requeue_after_auth() {
+                    tracing::warn!("outbox: {e}");
+                }
+                true
+            }
+            _ => {
+                self.gh.set_token(previous);
+                false
+            }
+        }
     }
 
     pub fn sign_out(&self) -> Result<()> {
@@ -278,7 +349,10 @@ impl Core {
     }
 
     pub async fn check_connectivity(&self) -> Connectivity {
-        let res = self.gh.probe().await;
+        let mut res = self.gh.probe().await;
+        if matches!(res, Err(GhError::Unauthorized)) && self.recover_auth().await {
+            res = self.gh.probe().await;
+        }
         self.observe(&res);
         let detail = res.as_ref().err().map(|e| e.to_string());
         Connectivity {
@@ -358,7 +432,10 @@ impl Core {
                 Ok(())
             });
         }
-        let res = sync_pr(&self.sync_ctx(), r).await;
+        let mut res = sync_pr(&self.sync_ctx(), r).await;
+        if matches!(res, Err(Error::GitHub(GhError::Unauthorized))) && self.recover_auth().await {
+            res = sync_pr(&self.sync_ctx(), r).await;
+        }
         match &res {
             Ok(o) => {
                 self.set_online(Some(true), None);

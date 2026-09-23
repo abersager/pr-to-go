@@ -167,6 +167,8 @@ pub struct World {
     /// Accept a review on a commit a force-push removed from the PR. What
     /// GitHub does here is unverified (DESIGN.md §3); the default refuses.
     pub accept_unreachable_review_commits: bool,
+    /// What GraphQL responses report as the remaining rate-limit budget.
+    pub graphql_remaining: u64,
     seq: u64,
 }
 
@@ -193,6 +195,7 @@ impl World {
             patch_limit: 400_000,
             blob_text_limit: 512 * 1024,
             accept_unreachable_review_commits: false,
+            graphql_remaining: 4999,
             seq: 0,
         };
         for u in [VIEWER, "alice", "bob"] {

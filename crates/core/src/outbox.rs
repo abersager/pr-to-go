@@ -497,9 +497,17 @@ impl Core {
 
     /// Advances every review that's due as far as it can go right now.
     pub async fn run_outbox_once(&self) -> Result<OutboxRun> {
+        crate::github::client::with_outbox_priority(self.run_outbox_pass()).await
+    }
+
+    async fn run_outbox_pass(&self) -> Result<OutboxRun> {
         let mut run = OutboxRun::default();
         if self.gh.is_work_offline() || !self.gh.has_token() {
             return Ok(run);
+        }
+        if self.has_auth_failures()? {
+            // Requeues them if gh has a newer token for this account.
+            self.recover_auth().await;
         }
         self.cleanup_pending_reviews().await?;
         let now = self.now();
@@ -568,6 +576,56 @@ impl Core {
             Ok(())
         })?;
         self.kick_outbox();
+        Ok(())
+    }
+
+    fn has_auth_failures(&self) -> Result<bool> {
+        self.db.read(|c| {
+            Ok(c.query_row(
+                "SELECT EXISTS (SELECT 1 FROM draft_review WHERE status = 'needs_attention'
+                   AND attention LIKE '%\"kind\":\"auth\"%')",
+                [],
+                |r| r.get(0),
+            )?)
+        })
+    }
+
+    /// Reviews stopped only because GitHub rejected the token go back in the
+    /// queue once a working token for the same account is in place.
+    pub(crate) fn requeue_after_auth(&self) -> Result<()> {
+        let now = self.now();
+        let requeued = self.db.write(|tx| {
+            let stuck: Vec<(i64, i64, String)> = {
+                let mut st = tx.prepare(
+                    "SELECT id, pr_id, attention FROM draft_review
+                     WHERE status = 'needs_attention' AND attention IS NOT NULL",
+                )?;
+                let rows = st.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?;
+                rows.collect::<Result<_, _>>()?
+            };
+            let mut requeued = Vec::new();
+            for (id, pr_id, raw) in stuck {
+                let Ok(mut a) = serde_json::from_str::<Attention>(&raw) else { continue };
+                if a.reasons.is_empty() || !a.reasons.iter().all(|r| matches!(r, Reason::Auth { .. })) {
+                    continue;
+                }
+                a.reasons.clear();
+                tx.execute(
+                    "UPDATE draft_review SET status = 'queued', attention = ?2, attempts = 0, next_attempt_at = NULL,
+                       last_error = NULL, last_error_kind = NULL, updated_at = ?3 WHERE id = ?1",
+                    params![id, serde_json::to_string(&a)?, now],
+                )?;
+                log(tx, id, &now, "auth", "queued", None)?;
+                requeued.push((id, pr_id));
+            }
+            Ok(requeued)
+        })?;
+        for (id, pr_id) in &requeued {
+            self.emit(Event::OutboxChanged { pr_id: *pr_id, draft_review_id: *id, status: "queued".into() });
+        }
+        if !requeued.is_empty() {
+            self.kick_outbox();
+        }
         Ok(())
     }
 
