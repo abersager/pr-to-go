@@ -29,6 +29,7 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "rus
 url = "2"
 humantime = "2"
 lol_html = "2"
+futures-util = "0.3"
 keyring = { version = "3", optional = true, features = ["apple-native", "windows-native", "sync-secret-service"] }
 
 [dev-dependencies]

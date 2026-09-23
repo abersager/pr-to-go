@@ -1,6 +1,6 @@
 import { useState } from "react";
-import type { OutboxItem, PrSummary } from "../types";
-import { ago, until } from "../util/format";
+import type { OutboxItem, PrSummary, Readiness } from "../types";
+import { ago, bytes, until } from "../util/format";
 
 export function SyncBadge({ pr }: { pr: PrSummary }) {
   const map: Record<string, [string, string]> = {
@@ -62,6 +62,14 @@ export function Inbox({
   onAdd,
   outbox,
   onOpenReview,
+  readiness,
+  progress,
+  syncing,
+  syncError,
+  hasSubscriptions,
+  onSyncAll,
+  onSettings,
+  onFollowReviewRequests,
 }: {
   prs: PrSummary[];
   selected: number | null;
@@ -69,6 +77,14 @@ export function Inbox({
   onAdd: (input: string) => Promise<void>;
   outbox: OutboxItem[];
   onOpenReview: (prId: number) => void;
+  readiness: Readiness | null;
+  progress: { done: number; total: number } | null;
+  syncing: boolean;
+  syncError: string | null;
+  hasSubscriptions: boolean;
+  onSyncAll: () => void;
+  onSettings: () => void;
+  onFollowReviewRequests: () => void;
 }) {
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
@@ -102,8 +118,30 @@ export function Inbox({
         </button>
         {error && <p className="error small">{error}</p>}
       </form>
+      <div className="inbox-head">
+        <button onClick={onSyncAll} disabled={syncing} title="Sync everything you follow, for offline review">
+          {syncing ? (progress && progress.total > 0 ? `Syncing ${progress.done}/${progress.total}…` : "Checking…") : "Sync all"}
+        </button>
+        {readiness && readiness.total > 0 && (
+          <span className="readiness" title={`${readiness.partial} partly available, ${readiness.notSynced} not synced yet`}>
+            {readiness.ready + readiness.partial}/{readiness.total} offline · {bytes(readiness.bytes)}
+          </span>
+        )}
+        <span className="spacer" />
+        <button className="icon-button" onClick={onSettings} title="What to sync">
+          ⚙
+        </button>
+      </div>
+      {syncError && <p className="error small pad">{syncError}</p>}
       <Outbox items={outbox} onOpen={onOpenReview} />
-      {prs.length === 0 && <p className="muted empty-list">No pull requests yet. Add one above.</p>}
+      {prs.length === 0 && !hasSubscriptions && (
+        <div className="empty-inbox muted small">
+          <p>Follow the pull requests you review, and they'll be ready whenever you're offline.</p>
+          <button onClick={onFollowReviewRequests}>+ Review requested from me</button>{" "}
+          <button onClick={onSettings}>More options…</button>
+        </div>
+      )}
+      {prs.length === 0 && hasSubscriptions && <p className="muted empty-list">Nothing in your inbox right now.</p>}
       <ul>
         {prs.map((pr) => (
           <li key={pr.id} className={pr.id === selected ? "selected" : ""} onClick={() => onSelect(pr.id)}>

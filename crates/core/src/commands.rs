@@ -204,6 +204,31 @@ impl Core {
                 let a: A = args(a)?;
                 out(self.interdiff(a.from_revision, a.to_revision)?)
             }
+            "subscriptions" => out(self.subscriptions()?),
+            "subscription_presets" => out(crate::inbox::PRESETS
+                .iter()
+                .map(|(label, query)| serde_json::json!({ "label": label, "query": query }))
+                .collect::<Vec<_>>()),
+            "add_subscription" => {
+                #[derive(serde::Deserialize)]
+                struct A {
+                    kind: String,
+                    value: String,
+                    label: Option<String>,
+                }
+                let a: A = args(a)?;
+                out(self.add_subscription(&a.kind, &a.value, a.label.as_deref())?)
+            }
+            "remove_subscription" => {
+                #[derive(serde::Deserialize)]
+                struct A {
+                    id: i64,
+                }
+                out(self.remove_subscription(args::<A>(a)?.id)?)
+            }
+            "sync_inbox" => out(self.sync_inbox().await?),
+            "readiness" => out(self.readiness()?),
+            "gc" => out(self.gc()?),
             _ => Err(Error::Invalid(format!("unknown command {cmd}"))),
         }
     }

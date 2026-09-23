@@ -51,6 +51,12 @@ pub enum Event {
         status: String,
     },
     InboxChanged,
+    /// Inbox sync progress: deep syncs finished of those scheduled.
+    #[serde(rename_all = "camelCase")]
+    SyncProgress {
+        done: usize,
+        total: usize,
+    },
 }
 
 #[derive(Serialize, Clone, Debug)]
@@ -93,6 +99,7 @@ pub struct Core {
     pub(crate) events: broadcast::Sender<Event>,
     pub(crate) data_dir: PathBuf,
     pub(crate) outbox_wake: Arc<tokio::sync::Notify>,
+    pub(crate) inbox_wake: Arc<tokio::sync::Notify>,
     pub(crate) crash_point: Mutex<Option<String>>,
     /// Reviews the outbox is working on right now (they can't be edited).
     pub(crate) outbox_busy: Mutex<std::collections::HashSet<i64>>,
@@ -118,6 +125,7 @@ impl Core {
             events,
             data_dir: opts.data_dir,
             outbox_wake: Arc::new(tokio::sync::Notify::new()),
+            inbox_wake: Arc::new(tokio::sync::Notify::new()),
             crash_point: Mutex::new(None),
             outbox_busy: Mutex::new(Default::default()),
             online: Mutex::new(None),

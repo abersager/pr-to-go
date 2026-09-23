@@ -190,7 +190,8 @@ export type CoreEvent =
   | { type: "syncFailed"; prId: number | null; label: string; message: string }
   | { type: "connectivity"; online: boolean; workOffline: boolean; detail: string | null }
   | { type: "outboxChanged"; prId: number; draftReviewId: number; status: string }
-  | { type: "inboxChanged" };
+  | { type: "inboxChanged" }
+  | { type: "syncProgress"; done: number; total: number };
 
 export type Side = "LEFT" | "RIGHT";
 export type Verdict = "COMMENT" | "APPROVE" | "REQUEST_CHANGES";
@@ -337,3 +338,26 @@ export type Proposal = {
   fileInDiff: boolean;
   toRevision: number;
 };
+
+export type Subscription = {
+  id: number;
+  kind: "repo" | "search";
+  repo: string | null;
+  query: string | null;
+  label: string;
+  enabled: boolean;
+  lastPolledAt: string | null;
+  lastError: string | null;
+  prs: number;
+};
+
+export type Readiness = {
+  total: number;
+  ready: number;
+  partial: number;
+  notSynced: number;
+  failed: number;
+  bytes: number;
+};
+
+export type InboxSync = { polled: number; synced: number; failed: number; errors: string[] };

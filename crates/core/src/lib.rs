@@ -10,6 +10,7 @@ pub mod diff;
 pub mod drafts;
 pub mod error;
 pub mod github;
+pub mod inbox;
 pub mod outbox;
 pub mod remap;
 pub mod service;

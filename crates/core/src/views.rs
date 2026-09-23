@@ -75,7 +75,8 @@ pub fn list_prs(db: &Db) -> Result<Vec<PrSummary>> {
     db.read(|c| {
         let sql = format!(
             "{SUMMARY_SELECT}
-             WHERE p.current_revision_id IS NOT NULL OR p.in_inbox = 1 OR COALESCE(l.pinned, 0) = 1
+             WHERE p.in_inbox = 1 OR COALESCE(l.pinned, 0) = 1
+                OR EXISTS (SELECT 1 FROM draft_review d WHERE d.pr_id = p.id AND d.status != 'discarded')
              ORDER BY p.updated_at DESC"
         );
         let mut st = c.prepare(&sql)?;

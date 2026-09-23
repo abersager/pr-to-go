@@ -193,24 +193,29 @@ async fn sync_once(ctx: &SyncCtx, r: &PrRef) -> Result<Option<SyncOutcome>> {
         None => None,
     };
 
-    // 3–4. Files, patches and blobs, only for a revision we don't have.
-    let new_rev = if existing_rev.is_none() {
-        let files = match fetch_files(ctx, r, &pr.head_ref_oid, &merge_base, local.as_ref().map(|l| l.pr_id))
-            .await?
-        {
-            FilesResult::Done(f, p) => (f, p),
-            FilesResult::HeadMoved => return Ok(None),
-        };
-        let commits = fetch_commits(gh, &pr.id).await?;
-        Some(NewRevision { files: files.0, commits, partial: files.1 })
-    } else {
-        None
+    // 3–5. Files, patches and blobs (only for a revision we don't have),
+    // commits, and the discussion, fetched side by side.
+    let revision = async {
+        if existing_rev.is_some() {
+            return Ok(None);
+        }
+        let (files, commits) = tokio::try_join!(
+            fetch_files(ctx, r, &pr.head_ref_oid, &merge_base, local.as_ref().map(|l| l.pr_id)),
+            fetch_commits(gh, &pr.id),
+        )?;
+        Ok::<_, Error>(Some((files, commits)))
     };
-
-    // 5. Discussion.
-    let reviews = fetch_reviews(gh, &pr.id).await?;
-    let threads = fetch_threads(gh, &pr.id).await?;
-    let issue_comments = fetch_issue_comments(gh, &pr.id).await?;
+    let (revision, reviews, threads, issue_comments) = tokio::try_join!(
+        revision,
+        fetch_reviews(gh, &pr.id),
+        fetch_threads(gh, &pr.id),
+        fetch_issue_comments(gh, &pr.id),
+    )?;
+    let new_rev = match revision {
+        None => None,
+        Some((FilesResult::HeadMoved, _)) => return Ok(None),
+        Some((FilesResult::Done(files, partial), commits)) => Some(NewRevision { files, commits, partial }),
+    };
 
     // 7. Images in all rendered HTML.
     let mut html: Vec<&str> = vec![&pr.body_html];

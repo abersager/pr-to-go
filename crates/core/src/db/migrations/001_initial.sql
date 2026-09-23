@@ -34,6 +34,7 @@ CREATE TABLE subscription (                                      -- (U)
   enabled           INTEGER NOT NULL DEFAULT 1,
   last_polled_at    TEXT,           -- local clock
   cursor_updated_at TEXT,           -- newest PR updatedAt seen (server clock)
+  last_error        TEXT,           -- or a warning, such as truncated search results
   created_at        TEXT NOT NULL,
   CHECK ((kind = 'repo' AND repo_full_name IS NOT NULL) OR (kind = 'search' AND query IS NOT NULL))
 ) STRICT;
@@ -93,6 +94,14 @@ CREATE TABLE pull_request (                                      -- (M)
   in_inbox            INTEGER NOT NULL DEFAULT 0,
   left_inbox_at       TEXT,
   UNIQUE (repo_id, number)
+) STRICT;
+
+-- Which PRs each subscription currently includes. `pull_request.in_inbox`
+-- is derived from this after every poll.
+CREATE TABLE subscription_member (                               -- (M)
+  subscription_id INTEGER NOT NULL REFERENCES subscription(id) ON DELETE CASCADE,
+  pr_id           INTEGER NOT NULL REFERENCES pull_request(id) ON DELETE CASCADE,
+  PRIMARY KEY (subscription_id, pr_id)
 ) STRICT;
 
 CREATE TABLE pr_local (                                          -- (U)

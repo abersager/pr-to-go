@@ -6,6 +6,9 @@ import type {
   CoreEvent,
   Draft,
   CommentResolution,
+  InboxSync,
+  Readiness,
+  Subscription,
   FileDiff as FileDiffT,
   NewComment,
   OutboxItem,
@@ -89,6 +92,14 @@ export const api = {
   rebaseDraft: (prId: number, comments: CommentResolution[]) => call<Draft>("rebase_draft", { prId, comments }),
   interdiff: (fromRevision: number, toRevision: number) =>
     call<FileDiffT[]>("interdiff", { fromRevision, toRevision }),
+  subscriptions: () => call<Subscription[]>("subscriptions"),
+  subscriptionPresets: () => call<{ label: string; query: string }[]>("subscription_presets"),
+  addSubscription: (kind: "repo" | "search", value: string, label?: string) =>
+    call<Subscription>("add_subscription", { kind, value, label }),
+  removeSubscription: (id: number) => call<void>("remove_subscription", { id }),
+  syncInbox: () => call<InboxSync>("sync_inbox"),
+  readiness: () => call<Readiness>("readiness"),
+  gc: () => call<{ revisions: number; blobs: number; prs: number; assets: number }>("gc"),
 };
 
 export function onCoreEvent(cb: (e: CoreEvent) => void): Promise<UnlistenFn> {

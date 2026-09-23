@@ -302,6 +302,7 @@ pub fn build(w: &mut World) -> Demo {
     );
     let c3 = w.commit(REPO, Some(&c2), &[("src/client.rs", Some(&client_v2))], "Also retry 5xx responses");
     w.push(REPO, retry_pr, &c3);
+    w.request_review(REPO, retry_pr, VIEWER);
     w.set_checks(
         REPO,
         &c3,
@@ -336,6 +337,7 @@ pub fn build(w: &mut World) -> Demo {
         "bob",
     );
     w.pr(REPO, dark_mode_pr).is_draft = true;
+    w.request_review(REPO, dark_mode_pr, VIEWER);
     w.set_checks(REPO, &dark, &[("test", "IN_PROGRESS", None)]);
 
     // PR 3: by the viewer, with a generated file too big for GitHub's patch.

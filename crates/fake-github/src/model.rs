@@ -118,6 +118,7 @@ pub struct Pr {
     pub reviews: Vec<Review>,
     pub threads: Vec<Thread>,
     pub issue_comments: Vec<IssueComment>,
+    pub requested_reviewers: Vec<String>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -327,6 +328,7 @@ impl World {
                 reviews: vec![],
                 threads: vec![],
                 issue_comments: vec![],
+                requested_reviewers: vec![],
             },
         );
         number
@@ -395,6 +397,13 @@ impl World {
                 t.start_line = None;
             }
         }
+    }
+
+    pub fn request_review(&mut self, repo: &str, number: u64, login: &str) {
+        let now = self.tick();
+        let pr = self.pr(repo, number);
+        pr.requested_reviewers.push(login.into());
+        pr.updated_at = now;
     }
 
     pub fn set_checks(&mut self, repo: &str, commit: &str, checks: &[(&str, &str, Option<&str>)]) {

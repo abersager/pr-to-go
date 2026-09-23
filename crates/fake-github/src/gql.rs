@@ -24,6 +24,8 @@ pub fn handle(w: &mut World, viewer: &str, op: &str, vars: &Value) -> GqlResult 
         "ThreadComments" => thread_comments(w, viewer, vars),
         "PrIssueComments" => pr_issue_comments(w, vars),
         "Blobs" => blobs(w, vars),
+        "SearchPrs" => search_prs(w, viewer, vars),
+        "RepoPrs" => repo_prs(w, vars),
         _ => crate::mutations::handle(w, viewer, op, vars),
     }
 }
@@ -379,6 +381,65 @@ fn blobs(w: &mut World, vars: &Value) -> GqlResult {
 
 pub fn pr_state_is_open(pr: &Pr) -> bool {
     pr.state == PrState::Open
+}
+
+fn index_pr(r: &Repo, pr: &Pr) -> Value {
+    let base_tip = &r.branches[&pr.base_ref];
+    json!({
+        "id": pr.node_id, "number": pr.number, "title": pr.title,
+        "url": format!("https://github.com/{}/pull/{}", r.full_name(), pr.number),
+        "state": pr.state.as_str(), "isDraft": pr.is_draft,
+        "createdAt": pr.created_at, "updatedAt": pr.updated_at,
+        "headRefOid": pr.head_oid, "baseRefOid": base_tip,
+        "baseRefName": pr.base_ref, "headRefName": pr.head_ref,
+        "author": { "login": pr.author },
+        "repository": {
+            "id": r.node_id, "name": r.name, "owner": { "login": r.owner },
+            "isPrivate": false, "isArchived": r.archived,
+        },
+    })
+}
+
+/// The qualifiers PR to Go's searches use: is:pr/open/closed/merged,
+/// author:, review-requested:, assignee: (never matches), repo:.
+fn search_prs(w: &mut World, viewer: &str, vars: &Value) -> GqlResult {
+    let q = s(vars, "q");
+    let me = |v: &str| if v == "@me" { viewer.to_string() } else { v.to_string() };
+    let mut hits: Vec<(&Repo, &Pr)> = Vec::new();
+    for r in w.repos.values() {
+        for pr in r.prs.values() {
+            let ok = q.split_whitespace().all(|t| match t.split_once(':') {
+                Some(("is", "pr")) => true,
+                Some(("is", "open")) => pr.state == PrState::Open,
+                Some(("is", "closed")) => pr.state != PrState::Open,
+                Some(("is", "merged")) => pr.state == PrState::Merged,
+                Some(("author", a)) => pr.author == me(a),
+                Some(("review-requested", a)) => pr.requested_reviewers.contains(&me(a)),
+                Some(("assignee", _)) => false,
+                Some(("repo", full)) => r.full_name() == full,
+                _ => true,
+            });
+            if ok {
+                hits.push((r, pr));
+            }
+        }
+    }
+    hits.sort_by(|a, b| b.1.updated_at.cmp(&a.1.updated_at));
+    let nodes: Vec<Value> = hits.iter().map(|(r, pr)| index_pr(r, pr)).collect();
+    let (nodes, info) = page(w, &nodes, 50, vars);
+    Ok(json!({ "search": { "issueCount": hits.len(), "pageInfo": info, "nodes": nodes } }))
+}
+
+fn repo_prs(w: &mut World, vars: &Value) -> GqlResult {
+    let full = format!("{}/{}", s(vars, "owner"), s(vars, "name"));
+    let r = w.repos.get(&full).ok_or_else(|| {
+        GqlError::NotFound(format!("Could not resolve to a Repository with the name '{full}'."))
+    })?;
+    let mut prs: Vec<&Pr> = r.prs.values().collect();
+    prs.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+    let nodes: Vec<Value> = prs.iter().map(|pr| index_pr(r, pr)).collect();
+    let (nodes, info) = page(w, &nodes, 50, vars);
+    Ok(json!({ "repository": { "pullRequests": { "pageInfo": info, "nodes": nodes } } }))
 }
 
 #[cfg(test)]

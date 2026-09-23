@@ -1,0 +1,40 @@
+query RepoPrs($owner: String!, $name: String!, $after: String) {
+  repository(owner: $owner, name: $name) {
+    pullRequests(first: 50, after: $after, orderBy: { field: UPDATED_AT, direction: DESC }) {
+      pageInfo {
+        hasNextPage
+        endCursor
+      }
+      nodes {
+        ...IndexPr
+      }
+    }
+  }
+}
+
+fragment IndexPr on PullRequest {
+  id
+  number
+  title
+  url
+  state
+  isDraft
+  createdAt
+  updatedAt
+  headRefOid
+  baseRefOid
+  baseRefName
+  headRefName
+  author {
+    login
+  }
+  repository {
+    id
+    name
+    owner {
+      login
+    }
+    isPrivate
+    isArchived
+  }
+}

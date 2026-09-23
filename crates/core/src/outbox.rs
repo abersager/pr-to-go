@@ -464,8 +464,13 @@ impl Core {
 
     /// Runs the background worker: the outbox whenever it's kicked or
     /// something is due, and a periodic sync of open PRs.
+    /// The background worker: the outbox, and the inbox every 15 minutes.
     /// Spawn this on the host's runtime; it never returns.
     pub async fn run_background(self: std::sync::Arc<Self>) {
+        tokio::join!(self.outbox_loop(), self.inbox_loop(Duration::from_secs(15 * 60)));
+    }
+
+    async fn outbox_loop(&self) {
         loop {
             let wait = match self.run_outbox_once().await {
                 Ok(run) => run

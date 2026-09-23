@@ -43,3 +43,10 @@ export function until(iso: string | null | undefined, now = Date.now()): string 
   if (s < 5400) return `in ${Math.round(s / 60)}m`;
   return `in ${Math.round(s / 3600)}h`;
 }
+
+export function bytes(n: number): string {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${Math.round(n / 1024)} KB`;
+  if (n < 1024 * 1024 * 1024) return `${(n / 1024 / 1024).toFixed(1)} MB`;
+  return `${(n / 1024 / 1024 / 1024).toFixed(2)} GB`;
+}

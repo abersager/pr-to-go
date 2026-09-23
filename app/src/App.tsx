@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { api, onCoreEvent } from "./api";
 import { Inbox } from "./components/Inbox";
 import { PrView } from "./components/PrView";
+import { Settings } from "./components/Settings";
 import { SignIn } from "./components/SignIn";
 import { TopBar } from "./components/TopBar";
 import type { AuthStatus, Connectivity } from "./types";
@@ -37,6 +38,26 @@ export function App() {
   const prs = useAsync(() => (signedIn ? api.listPrs() : Promise.resolve([])), [signedIn, tick]);
   const outbox = useAsync(() => (signedIn ? api.outbox() : Promise.resolve([])), [signedIn, tick]);
   const [reviewFor, setReviewFor] = useState<number | null>(null);
+  const readiness = useAsync(() => (signedIn ? api.readiness() : Promise.resolve(null)), [signedIn, tick]);
+  const subscriptions = useAsync(() => (signedIn ? api.subscriptions() : Promise.resolve([])), [signedIn, tick]);
+  const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
+  const [syncing, setSyncing] = useState(false);
+  const [syncError, setSyncError] = useState<string | null>(null);
+  const [settings, setSettings] = useState(false);
+  const syncAll = useCallback(async () => {
+    setSyncing(true);
+    setSyncError(null);
+    try {
+      const r = await api.syncInbox();
+      if (r.failed > 0) setSyncError(`${r.failed} could not be synced: ${r.errors[0] ?? ""}`);
+    } catch (e) {
+      setSyncError((e as Error).message);
+    } finally {
+      setSyncing(false);
+      setProgress(null);
+      setTick((t) => t + 1);
+    }
+  }, []);
 
   useEffect(() => {
     api.authStatus().then(setAuth, () => setAuth({ signedIn: false, login: null, source: null, scopes: null }));
@@ -47,6 +68,10 @@ export function App() {
     const unlisten = onCoreEvent((e) => {
       if (e.type === "connectivity") {
         setConn((c) => ({ ...c, online: e.online, workOffline: e.workOffline, detail: e.detail }));
+      }
+      if (e.type === "syncProgress") {
+        setProgress({ done: e.done, total: e.total });
+        return;
       }
       setTick((t) => t + 1);
     });
@@ -84,6 +109,17 @@ export function App() {
         selected={selected}
         onSelect={setSelected}
         outbox={outbox.data ?? []}
+        readiness={readiness.data ?? null}
+        progress={progress}
+        syncing={syncing}
+        syncError={syncError}
+        hasSubscriptions={(subscriptions.data ?? []).length > 0}
+        onSyncAll={() => void syncAll()}
+        onSettings={() => setSettings(true)}
+        onFollowReviewRequests={async () => {
+          await api.addSubscription("search", "is:open is:pr review-requested:@me", "Review requested from me");
+          void syncAll();
+        }}
         onOpenReview={(prId) => {
           setReviewFor(prId);
           setRoute({ prId, tab: "conversation", file: null });
@@ -94,6 +130,12 @@ export function App() {
           prs.reload();
         }}
       />
+      {settings && (
+        <Settings
+          onClose={() => setSettings(false)}
+          onChanged={() => setTick((t) => t + 1)}
+        />
+      )}
       <main className="main">
         {selected !== null ? (
           <PrView

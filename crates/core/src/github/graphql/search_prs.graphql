@@ -1,0 +1,41 @@
+query SearchPrs($q: String!, $after: String) {
+  search(query: $q, type: ISSUE, first: 50, after: $after) {
+    issueCount
+    pageInfo {
+      hasNextPage
+      endCursor
+    }
+    nodes {
+      ... on PullRequest {
+        ...IndexPr
+      }
+    }
+  }
+}
+
+fragment IndexPr on PullRequest {
+  id
+  number
+  title
+  url
+  state
+  isDraft
+  createdAt
+  updatedAt
+  headRefOid
+  baseRefOid
+  baseRefName
+  headRefName
+  author {
+    login
+  }
+  repository {
+    id
+    name
+    owner {
+      login
+    }
+    isPrivate
+    isArchived
+  }
+}
