@@ -1,0 +1,10 @@
+PR to Go
+Copyright 2026 The PR to Go authors
+
+This product is licensed under the Apache License, Version 2.0 (see LICENSE).
+
+Design ideas were borrowed, with thanks, from:
+
+  Hubtty (https://github.com/hubtty/hubtty), Apache License 2.0.
+  prr (https://github.com/danobi/prr), GNU GPL v2. Ideas only; no prr code
+  is included in this product.
