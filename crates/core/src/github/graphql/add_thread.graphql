@@ -1,0 +1,32 @@
+mutation AddThread(
+  $reviewId: ID!
+  $path: String!
+  $body: String!
+  $subjectType: PullRequestReviewThreadSubjectType
+  $line: Int
+  $side: DiffSide
+  $startLine: Int
+  $startSide: DiffSide
+) {
+  addPullRequestReviewThread(
+    input: {
+      pullRequestReviewId: $reviewId
+      path: $path
+      body: $body
+      subjectType: $subjectType
+      line: $line
+      side: $side
+      startLine: $startLine
+      startSide: $startSide
+    }
+  ) {
+    thread {
+      id
+      comments(first: 1) {
+        nodes {
+          id
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,10 @@
+query ReviewState($reviewId: ID!) {
+  node(id: $reviewId) {
+    ... on PullRequestReview {
+      id
+      state
+      url
+      submittedAt
+    }
+  }
+}

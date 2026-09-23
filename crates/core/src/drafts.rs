@@ -228,6 +228,21 @@ pub fn has_suggestion(body: &str) -> bool {
     body.lines().any(|l| l.trim_start().starts_with("```suggestion"))
 }
 
+/// Turns suggestion blocks into plain code blocks (for a comment that no
+/// longer sits on the lines it would replace).
+pub fn strip_suggestions(body: &str) -> String {
+    body.lines()
+        .map(|l| {
+            if l.trim_start().starts_with("```suggestion") {
+                l.replacen("```suggestion", "```", 1)
+            } else {
+                l.to_string()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 pub(crate) struct RevisionFile {
     pub hunks: Vec<Hunk>,
     pub has_patch: bool,
@@ -650,10 +665,7 @@ impl Core {
         let now = self.now();
         let id = self.db.write(|tx| {
             let id = active_draft_id(tx, pr_id)?.ok_or_else(|| Error::Invalid("There's no draft review.".into()))?;
-            let status: String = tx.query_row("SELECT status FROM draft_review WHERE id = ?1", [id], |r| r.get(0))?;
-            if !matches!(status.as_str(), "queued" | "needs_attention" | "draft") {
-                return Err(Error::Invalid("This review is being sent right now and can't be edited.".into()));
-            }
+            self.check_can_take_back(tx, id, "edited")?;
             crate::outbox::release_pending_review(tx, id)?;
             tx.execute(
                 "UPDATE draft_review SET status = 'draft', queued_at = NULL, next_attempt_at = NULL, updated_at = ?2
@@ -673,13 +685,7 @@ impl Core {
         let now = self.now();
         let id = self.db.write(|tx| {
             let Some(id) = active_draft_id(tx, pr_id)? else { return Ok(None) };
-            let status: String =
-                tx.query_row("SELECT status FROM draft_review WHERE id = ?1", [id], |r| r.get(0))?;
-            if matches!(status.as_str(), "staging" | "submitting" | "preflight") {
-                return Err(Error::Invalid(
-                    "This review is being sent right now and can't be discarded.".into(),
-                ));
-            }
+            self.check_can_take_back(tx, id, "discarded")?;
             crate::outbox::release_pending_review(tx, id)?;
             tx.execute(
                 "UPDATE draft_review SET status = 'discarded', updated_at = ?2 WHERE id = ?1",
@@ -691,6 +697,34 @@ impl Core {
         if let Some(id) = id {
             self.emit(crate::Event::OutboxChanged { pr_id, draft_review_id: id, status: "discarded".into() });
             self.kick_outbox();
+        }
+        Ok(())
+    }
+}
+
+impl Core {
+    /// A queued review can be taken back (edited or discarded) at any point,
+    /// except while the outbox is working on it this instant, or while the
+    /// outcome of its last request is unknown. Taking it back then could
+    /// submit it twice: once from before, once after the edit.
+    fn check_can_take_back(&self, tx: &Connection, id: i64, verb: &str) -> Result<()> {
+        if self.outbox_busy.lock().unwrap().contains(&id) {
+            return Err(Error::Invalid(format!(
+                "This review is being sent right now and can't be {verb}. Try again in a moment."
+            )));
+        }
+        let (status, inflight): (String, Option<String>) =
+            tx.query_row("SELECT status, inflight FROM draft_review WHERE id = ?1", [id], |r| {
+                Ok((r.get(0)?, r.get(1)?))
+            })?;
+        if inflight.is_some() {
+            return Err(Error::Invalid(format!(
+                "PR to Go is waiting for GitHub to confirm whether the last step went through. \
+                 The review can be {verb} once that's settled (it needs a connection)."
+            )));
+        }
+        if status == "submitted" {
+            return Err(Error::Invalid("This review has already been sent.".into()));
         }
         Ok(())
     }

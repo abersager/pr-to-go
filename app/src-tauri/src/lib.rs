@@ -94,6 +94,7 @@ pub fn run() {
                     }
                 }
             });
+            tauri::async_runtime::spawn(core.clone().run_background());
             let startup = core.clone();
             tauri::async_runtime::spawn(async move {
                 if let Some(token) = dev_env("PRTOGO_TOKEN")

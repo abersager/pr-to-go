@@ -341,3 +341,24 @@ code { font-family: var(--mono); font-size: 0.92em; }
 .review-button .count { margin-left: 6px; }
 .review-button.queued, .review-button.needs_attention { border-color: var(--warn); }
 .draft-review-card { cursor: pointer; border-color: var(--draft); }
+
+/* Outbox */
+.outbox { border-bottom: 1px solid var(--border); padding: 6px 0; }
+.outbox h3 { font-size: 12px; margin: 4px 12px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); }
+.outbox ul { list-style: none; margin: 0; padding: 0; }
+.outbox-item { display: grid; grid-template-columns: 12px 1fr; column-gap: 6px; padding: 4px 12px; cursor: pointer; }
+.outbox-item:hover { background: var(--bg-hover); }
+.outbox-item .title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
+.outbox-item .small { grid-column: 2; }
+.outbox-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); margin-top: 5px; }
+.outbox-dot.needs_attention { background: var(--warn); }
+.outbox-dot.submitted { background: var(--ok); }
+.outbox-dot.staging, .outbox-dot.submitting, .outbox-dot.preflight { animation: pulse 1s infinite alternate; }
+.attention { display: flex; flex-direction: column; gap: 8px; margin: 8px 0; }
+.attention-card { border: 1px solid var(--warn); border-radius: 6px; padding: 8px 10px; background: var(--bg); font-size: 13px; }
+.attention-card p { margin: 0 0 6px; }
+.choice { display: flex; gap: 6px; align-items: flex-start; padding: 3px 0; }
+.choice input { margin-top: 3px; }
+.comment-choice { display: flex; flex-direction: column; gap: 4px; padding: 6px 0; border-top: 1px solid var(--border); }
+.comment-choice select { align-self: flex-start; }
+.retry-line { display: flex; flex-wrap: wrap; gap: 4px; align-items: baseline; }

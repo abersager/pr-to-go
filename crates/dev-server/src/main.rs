@@ -6,11 +6,13 @@
 //! `--data <dir>` (default: a fresh temp dir), `--empty` (don't add the demo
 //! PRs), `--signed-out` (start at the sign-in screen).
 //!
-//! Demo controls (POST): `/__demo/offline`, `/__demo/online`,
-//! `/__demo/push-retry` (force-push the retry PR), `/__demo/request-changes`.
+//! Demo controls (POST): `/__demo/reset` (fresh world and app state),
+//! `/__demo/offline`, `/__demo/online`, `/__demo/push-retry` (force-push the
+//! retry PR), `/__demo/request-changes`.
 
 use std::convert::Infallible;
-use std::sync::Arc;
+use std::path::PathBuf;
+use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
 use axum::Router;
@@ -19,7 +21,7 @@ use axum::http::{StatusCode, header};
 use axum::response::sse::{Event as SseEvent, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
-use fake_github::{FakeGitHub, TOKEN, demo};
+use fake_github::{FakeGitHub, TOKEN, World, demo};
 use pr_to_go_core::auth::{MemorySecretStore, SecretStore};
 use pr_to_go_core::commands::UiError;
 use pr_to_go_core::{Core, CoreOptions};
@@ -27,10 +29,31 @@ use serde_json::Value;
 use tokio_stream::StreamExt;
 use tokio_stream::wrappers::BroadcastStream;
 
-struct Dev {
+#[derive(Clone)]
+struct Opts {
+    data: Option<PathBuf>,
+    empty: bool,
+    signed_out: bool,
+}
+
+/// One app instance: its core, the worker running for it, and the demo.
+struct Instance {
     core: Arc<Core>,
-    fake: FakeGitHub,
+    worker: tokio::task::JoinHandle<()>,
     demo: demo::Demo,
+    _tmp: Option<tempfile::TempDir>,
+}
+
+struct Dev {
+    fake: FakeGitHub,
+    opts: Opts,
+    current: RwLock<Instance>,
+}
+
+impl Dev {
+    fn core(&self) -> Arc<Core> {
+        self.current.read().unwrap().core.clone()
+    }
 }
 
 type S = State<Arc<Dev>>;
@@ -44,38 +67,46 @@ fn flag(name: &str) -> bool {
     std::env::args().any(|a| a == name)
 }
 
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
-    let port = arg("--port").unwrap_or_else(|| "1421".into());
-    let fake_port = arg("--fake-port").unwrap_or_else(|| "1422".into());
-    let fake = FakeGitHub::start_on(&format!("127.0.0.1:{fake_port}")).await;
-    let demo = fake.with(demo::build);
-
-    let _tmp;
-    let data_dir = match arg("--data") {
-        Some(d) => std::path::PathBuf::from(d),
+async fn start(fake: &FakeGitHub, demo: demo::Demo, opts: &Opts) -> anyhow::Result<Instance> {
+    let (data_dir, tmp) = match &opts.data {
+        Some(d) => (d.clone(), None),
         None => {
             let t = tempfile::tempdir()?;
-            let p = t.path().to_owned();
-            _tmp = t;
-            p
+            (t.path().to_owned(), Some(t))
         }
     };
     let secrets: Arc<dyn SecretStore> = Arc::new(MemorySecretStore::default());
-    let mut opts = CoreOptions::new(data_dir.clone(), secrets);
-    opts.github.api_base = fake.api_base().to_string();
-    opts.github.mutation_spacing = Duration::from_millis(100);
-    let core = Core::open(opts)?;
-    if !flag("--signed-out") {
+    let mut core_opts = CoreOptions::new(data_dir.clone(), secrets);
+    core_opts.github.api_base = fake.api_base().to_string();
+    core_opts.github.mutation_spacing = Duration::from_millis(100);
+    let core = Core::open(core_opts)?;
+    if !opts.signed_out {
         core.sign_in(TOKEN, "pat").await?;
-        if !flag("--empty") {
+        if !opts.empty {
             for n in [demo.retry_pr, demo.dark_mode_pr, demo.fixtures_pr] {
                 core.add_pr(&format!("{}#{n}", demo::REPO)).await?;
             }
         }
     }
+    println!("prtg-dev: data in {}", data_dir.display());
+    let worker = tokio::spawn(core.clone().run_background());
+    Ok(Instance { core, worker, demo, _tmp: tmp })
+}
 
-    let dev = Arc::new(Dev { core, fake, demo });
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
+    let port = arg("--port").unwrap_or_else(|| "1421".into());
+    let fake_port = arg("--fake-port").unwrap_or_else(|| "1422".into());
+    let opts = Opts {
+        data: arg("--data").map(PathBuf::from),
+        empty: flag("--empty"),
+        signed_out: flag("--signed-out"),
+    };
+    let fake = FakeGitHub::start_on(&format!("127.0.0.1:{fake_port}")).await;
+    let demo = fake.with(demo::build);
+    let instance = start(&fake, demo, &opts).await?;
+    let dev = Arc::new(Dev { fake, opts, current: RwLock::new(instance) });
+
     let app = Router::new()
         .route("/api/{cmd}", post(api))
         .route("/events", get(events))
@@ -85,7 +116,6 @@ async fn main() -> anyhow::Result<()> {
     let listener = tokio::net::TcpListener::bind(format!("127.0.0.1:{port}")).await?;
     println!("prtg-dev: API on http://127.0.0.1:{port}");
     println!("prtg-dev: fake GitHub on {} (token {TOKEN})", dev.fake.api_base());
-    println!("prtg-dev: data in {}", data_dir.display());
     axum::serve(listener, app).await?;
     Ok(())
 }
@@ -99,14 +129,14 @@ async fn api(State(d): S, Path(cmd): Path<String>, body: axum::body::Bytes) -> R
             Err(e) => return (StatusCode::BAD_REQUEST, format!("bad JSON: {e}")).into_response(),
         }
     };
-    match d.core.dispatch(&cmd, args).await {
+    match d.core().dispatch(&cmd, args).await {
         Ok(v) => axum::Json(v).into_response(),
         Err(e) => (StatusCode::UNPROCESSABLE_ENTITY, axum::Json(UiError::from(e))).into_response(),
     }
 }
 
 async fn events(State(d): S) -> Sse<impl tokio_stream::Stream<Item = Result<SseEvent, Infallible>>> {
-    let stream = BroadcastStream::new(d.core.subscribe()).filter_map(|e| {
+    let stream = BroadcastStream::new(d.core().subscribe()).filter_map(|e| {
         let e = e.ok()?;
         Some(Ok(SseEvent::default().data(serde_json::to_string(&e).ok()?)))
     });
@@ -114,32 +144,58 @@ async fn events(State(d): S) -> Sse<impl tokio_stream::Stream<Item = Result<SseE
 }
 
 async fn local(State(d): S, Path(path): Path<String>, RawQuery(q): RawQuery) -> Response {
-    match d.core.local_resource(&path, q.as_deref()) {
+    match d.core().local_resource(&path, q.as_deref()) {
         Some((bytes, ct)) => ([(header::CONTENT_TYPE, ct)], bytes).into_response(),
         None => StatusCode::NOT_FOUND.into_response(),
     }
 }
 
 async fn demo_action(State(d): S, Path(action): Path<String>) -> Response {
+    let retry_pr = d.current.read().unwrap().demo.retry_pr;
     match action.as_str() {
+        "reset" => {
+            d.fake.come_up().await;
+            let demo = d.fake.with(|w| {
+                let base = w.base_url.clone();
+                *w = World::new();
+                w.base_url = base;
+                demo::build(w)
+            });
+            match start(&d.fake, demo, &d.opts).await {
+                Ok(fresh) => {
+                    let old = std::mem::replace(&mut *d.current.write().unwrap(), fresh);
+                    old.worker.abort();
+                }
+                Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+            }
+        }
         "offline" => d.fake.go_down(),
         "online" => d.fake.come_up().await,
         "push-retry" => {
-            let pr = d.demo.retry_pr;
             d.fake.with(|w| {
-                let head = w.pr(demo::REPO, pr).head_oid.clone();
+                let head = w.pr(demo::REPO, retry_pr).head_oid.clone();
                 let text = w.repo(demo::REPO).file_text(&head, "src/retry.rs").unwrap();
-                let text = text.replace("pub attempts: u32,", "pub attempts: u32,\n    /// Never wait longer than this in total.\n    pub deadline: Option<Duration>,")
+                let text = text
+                    .replace(
+                        "pub attempts: u32,",
+                        "pub attempts: u32,\n    /// Never wait longer than this in total.\n    pub deadline: Option<Duration>,",
+                    )
                     .replace("Backoff { attempts: 5,", "Backoff { deadline: None, attempts: 5,");
                 let base = w.repo(demo::REPO).branches["main"].clone();
                 let c = w.commit(demo::REPO, Some(&base), &[("src/retry.rs", Some(&text))], "Squash: retries with a deadline");
-                w.push(demo::REPO, pr, &c);
+                w.push(demo::REPO, retry_pr, &c);
             });
         }
         "request-changes" => {
-            let pr = d.demo.retry_pr;
             d.fake.with(|w| {
-                w.add_review(demo::REPO, pr, "bob", "CHANGES_REQUESTED", "Please don't retry POSTs.", &[]);
+                w.add_review(
+                    demo::REPO,
+                    retry_pr,
+                    "bob",
+                    "CHANGES_REQUESTED",
+                    "Please don't retry POSTs.",
+                    &[],
+                );
             });
         }
         _ => return (StatusCode::NOT_FOUND, "unknown demo action").into_response(),

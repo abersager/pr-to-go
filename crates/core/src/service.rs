@@ -93,6 +93,9 @@ pub struct Core {
     pub(crate) events: broadcast::Sender<Event>,
     pub(crate) data_dir: PathBuf,
     pub(crate) outbox_wake: Arc<tokio::sync::Notify>,
+    pub(crate) crash_point: Mutex<Option<String>>,
+    /// Reviews the outbox is working on right now (they can't be edited).
+    pub(crate) outbox_busy: Mutex<std::collections::HashSet<i64>>,
     online: Mutex<Option<bool>>,
     syncing: Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
 }
@@ -115,6 +118,8 @@ impl Core {
             events,
             data_dir: opts.data_dir,
             outbox_wake: Arc::new(tokio::sync::Notify::new()),
+            crash_point: Mutex::new(None),
+            outbox_busy: Mutex::new(Default::default()),
             online: Mutex::new(None),
             syncing: Mutex::new(HashMap::new()),
         }))
@@ -235,12 +240,17 @@ impl Core {
     // ─── Connectivity ────────────────────────────────────────────────────
 
     fn set_online(&self, online: Option<bool>, detail: Option<String>) {
-        let changed = {
+        let (changed, came_online) = {
             let mut o = self.online.lock().unwrap();
             let changed = *o != online;
+            let came_online = online == Some(true) && *o != Some(true);
             *o = online;
-            changed
+            (changed, came_online)
         };
+        if came_online {
+            // Anything queued while offline can go now.
+            self.kick_outbox();
+        }
         if changed || detail.is_some() {
             self.emit(Event::Connectivity {
                 online: online.unwrap_or(false),
@@ -286,6 +296,9 @@ impl Core {
         let online = if offline { Some(false) } else { None };
         self.set_online(online, None);
         self.emit(Event::Connectivity { online: false, work_offline: offline, detail: None });
+        if !offline {
+            self.kick_outbox();
+        }
         Ok(())
     }
 

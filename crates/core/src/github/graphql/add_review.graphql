@@ -1,0 +1,17 @@
+mutation AddReview($prId: ID!, $commit: GitObjectID!, $threads: [DraftPullRequestReviewThread]) {
+  addPullRequestReview(input: { pullRequestId: $prId, commitOID: $commit, threads: $threads }) {
+    pullRequestReview {
+      id
+      state
+      comments(first: 100) {
+        nodes {
+          id
+          path
+          line
+          startLine
+          body
+        }
+      }
+    }
+  }
+}

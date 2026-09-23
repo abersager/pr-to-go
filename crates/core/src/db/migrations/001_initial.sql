@@ -273,6 +273,7 @@ CREATE TABLE draft_review (                                      -- (U)
   submitted_review_node_id TEXT,
   submitted_url            TEXT,
   cleanup_review_id        TEXT,    -- our pending review to delete once online (after discard)
+  inflight                 TEXT,    -- mutation sent but its result not yet stored: reconcile first
   created_at               TEXT NOT NULL,
   updated_at               TEXT NOT NULL
 ) STRICT;

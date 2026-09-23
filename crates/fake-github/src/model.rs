@@ -70,6 +70,8 @@ pub struct ReviewComment {
     pub commit_oid: String,
     pub original_commit_oid: String,
     pub diff_hunk: String,
+    /// For replies: the thread's first comment.
+    pub reply_to: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -161,6 +163,9 @@ pub struct World {
     pub patch_limit: usize,
     /// Blob text longer than this comes back truncated from GraphQL.
     pub blob_text_limit: usize,
+    /// Accept a review on a commit a force-push removed from the PR. What
+    /// GitHub does here is unverified (DESIGN.md §3); the default refuses.
+    pub accept_unreachable_review_commits: bool,
     seq: u64,
 }
 
@@ -186,6 +191,7 @@ impl World {
             page_size: None,
             patch_limit: 400_000,
             blob_text_limit: 512 * 1024,
+            accept_unreachable_review_commits: false,
             seq: 0,
         };
         for u in [VIEWER, "alice", "bob"] {
@@ -336,48 +342,59 @@ impl World {
     /// and still part of the new diff.
     pub fn push(&mut self, repo: &str, number: u64, new_head: &str) {
         let now = self.tick();
-        let r = self.repo(repo);
-        let pr = r.prs[&number].clone();
-        let old_head = pr.head_oid.clone();
-        let base_tip = r.branches[&pr.base_ref].clone();
-        let old_mb = r.merge_base(&base_tip, &old_head).expect("merge base");
-        let new_mb = r.merge_base(&base_tip, new_head).expect("merge base");
-        let new_files = r.diff(&new_mb, new_head, usize::MAX);
+        let pr = self.repo(repo).prs[&number].clone();
         let mut threads = pr.threads.clone();
-        for t in threads.iter_mut().filter(|t| t.subject_type == "LINE" && !t.outdated) {
-            let side = t.side.clone().unwrap_or_else(|| "RIGHT".into());
-            let (from, to) =
-                if side == "LEFT" { (&old_mb, &new_mb) } else { (&old_head, &new_head.to_string()) };
-            let old_text = r.file_text(from, &t.path);
-            let new_text = r.file_text(to, &t.path);
-            let mapped = match (old_text, new_text, t.line) {
-                (Some(a), Some(b), Some(line)) => map_line(&a, &b, line).filter(|nl| {
-                    new_files
-                        .iter()
-                        .find(|f| f.path == t.path)
-                        .is_some_and(|f| in_hunks(f.patch.as_deref(), &side, *nl))
-                }),
-                _ => None,
-            };
-            match mapped {
-                Some(nl) => {
-                    let delta = nl as i64 - t.line.unwrap() as i64;
-                    t.line = Some(nl);
-                    t.start_line = t.start_line.map(|s| (s as i64 + delta) as u32);
-                    t.commit_oid = new_head.into();
-                }
-                None => {
-                    t.outdated = true;
-                    t.line = None;
-                    t.start_line = None;
-                }
-            }
+        for t in threads.iter_mut() {
+            let from = t.commit_oid.clone();
+            self.reanchor(repo, number, t, &from, new_head);
         }
+        let r = self.repo(repo);
         r.branches.insert(pr.head_ref.clone(), new_head.into());
         let p = r.prs.get_mut(&number).unwrap();
         p.head_oid = new_head.into();
         p.threads = threads;
         p.updated_at = now;
+    }
+
+    /// Moves a line thread from `from_commit` to `to_head`, or marks it
+    /// outdated if its lines changed or left the diff.
+    pub fn reanchor(&self, repo: &str, number: u64, t: &mut Thread, from_commit: &str, to_head: &str) {
+        if t.subject_type != "LINE" || t.outdated || from_commit == to_head {
+            return;
+        }
+        let r = &self.repos[repo];
+        let pr = &r.prs[&number];
+        let base_tip = r.branches[&pr.base_ref].clone();
+        let old_mb = r.merge_base(&base_tip, from_commit).expect("merge base");
+        let new_mb = r.merge_base(&base_tip, to_head).expect("merge base");
+        let new_files = r.diff(&new_mb, to_head, usize::MAX);
+        let side = t.side.clone().unwrap_or_else(|| "RIGHT".into());
+        let (from, to) =
+            if side == "LEFT" { (old_mb.as_str(), new_mb.as_str()) } else { (from_commit, to_head) };
+        let old_text = r.file_text(from, &t.path);
+        let new_text = r.file_text(to, &t.path);
+        let mapped = match (old_text, new_text, t.line) {
+            (Some(a), Some(b), Some(line)) => map_line(&a, &b, line).filter(|nl| {
+                new_files
+                    .iter()
+                    .find(|f| f.path == t.path)
+                    .is_some_and(|f| in_hunks(f.patch.as_deref(), &side, *nl))
+            }),
+            _ => None,
+        };
+        match mapped {
+            Some(nl) => {
+                let delta = nl as i64 - t.line.unwrap() as i64;
+                t.line = Some(nl);
+                t.start_line = t.start_line.map(|s| (s as i64 + delta) as u32);
+                t.commit_oid = to_head.into();
+            }
+            None => {
+                t.outdated = true;
+                t.line = None;
+                t.start_line = None;
+            }
+        }
     }
 
     pub fn set_checks(&mut self, repo: &str, commit: &str, checks: &[(&str, &str, Option<&str>)]) {
@@ -429,6 +446,7 @@ impl World {
                     commit_oid: head.clone(),
                     original_commit_oid: head.clone(),
                     diff_hunk: hunk,
+                    reply_to: None,
                 }],
             });
         }

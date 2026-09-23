@@ -15,11 +15,15 @@ export function PrView({
   tick,
   route,
   onRoute,
+  openReview = false,
+  onReviewOpened,
 }: {
   prId: number;
   tick: number;
   route: Route;
   onRoute: (r: Partial<Route>) => void;
+  openReview?: boolean;
+  onReviewOpened?: () => void;
 }) {
   const { data: pr, error, reload } = useAsync(() => api.getPr(prId), [prId, tick]);
   const tab = route.tab;
@@ -27,7 +31,7 @@ export function PrView({
   const [syncing, setSyncing] = useState(false);
   const [syncError, setSyncError] = useState<string | null>(null);
   const [draft, setDraft] = useState<Draft | null>(null);
-  const [panel, setPanel] = useState(false);
+  const [panel, setPanel] = useState(openReview);
   const [notice, setNotice] = useState<string | null>(null);
   const revisionId = pr?.revision?.id;
 
@@ -37,6 +41,12 @@ export function PrView({
   useEffect(() => {
     if (pr) setDraft(pr.draft);
   }, [pr]);
+  useEffect(() => {
+    if (openReview) {
+      setPanel(true);
+      onReviewOpened?.();
+    }
+  }, [openReview, onReviewOpened]);
 
   if (error) return <p className="error pad">{error.message}</p>;
   if (!pr) return <p className="muted pad">Loading…</p>;

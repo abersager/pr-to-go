@@ -1,5 +1,10 @@
 import { expect, test } from "@playwright/test";
 
+// Every test starts from the same demo world and a fresh app.
+test.beforeEach(async ({ request }) => {
+  await request.post("http://127.0.0.1:1421/__demo/reset");
+});
+
 test("review a synced PR: description, checks, diff, threads, context", async ({ page }) => {
   await page.goto("/");
   const pr = page.getByText("Retry failed requests with exponential backoff").first();

@@ -35,6 +35,8 @@ export function App() {
   const setSelected = (prId: number) => setRoute({ prId, tab: "conversation", file: null });
   const signedIn = auth?.signedIn ?? false;
   const prs = useAsync(() => (signedIn ? api.listPrs() : Promise.resolve([])), [signedIn, tick]);
+  const outbox = useAsync(() => (signedIn ? api.outbox() : Promise.resolve([])), [signedIn, tick]);
+  const [reviewFor, setReviewFor] = useState<number | null>(null);
 
   useEffect(() => {
     api.authStatus().then(setAuth, () => setAuth({ signedIn: false, login: null, source: null, scopes: null }));
@@ -81,6 +83,11 @@ export function App() {
         prs={prs.data ?? []}
         selected={selected}
         onSelect={setSelected}
+        outbox={outbox.data ?? []}
+        onOpenReview={(prId) => {
+          setReviewFor(prId);
+          setRoute({ prId, tab: "conversation", file: null });
+        }}
         onAdd={async (input) => {
           const id = await api.addPr(input);
           setSelected(id);
@@ -89,7 +96,15 @@ export function App() {
       />
       <main className="main">
         {selected !== null ? (
-          <PrView key={selected} prId={selected} tick={tick} route={route} onRoute={setRoute} />
+          <PrView
+            key={selected}
+            prId={selected}
+            tick={tick}
+            route={route}
+            onRoute={setRoute}
+            openReview={reviewFor === selected}
+            onReviewOpened={() => setReviewFor(null)}
+          />
         ) : (
           <div className="empty muted">
             <p>Select a pull request, or add one by URL.</p>

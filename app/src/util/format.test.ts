@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { ago, imageType, plural, short } from "./format";
+import { ago, imageType, plural, short, until } from "./format";
 
 test("formats", () => {
   const now = Date.parse("2026-09-23T12:00:00Z");
@@ -13,4 +13,11 @@ test("formats", () => {
   expect(plural(2, "file")).toBe("2 files");
   expect(imageType("a/B.PNG")).toBe("image/png");
   expect(imageType("a.rs")).toBeNull();
+});
+
+test("until", () => {
+  const now = Date.parse("2026-09-23T12:00:00Z");
+  expect(until("2026-09-23T12:00:30Z", now)).toBe("in 30s");
+  expect(until("2026-09-23T12:05:00Z", now)).toBe("in 5m");
+  expect(until("2026-09-23T11:00:00Z", now)).toBe("now");
 });

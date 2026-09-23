@@ -1,0 +1,14 @@
+query PendingReviews($prId: ID!) {
+  node(id: $prId) {
+    ... on PullRequest {
+      reviews(states: [PENDING], first: 5) {
+        nodes {
+          id
+          author {
+            login
+          }
+        }
+      }
+    }
+  }
+}

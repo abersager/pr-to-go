@@ -212,6 +212,8 @@ pub struct PrDetail {
     pub issue_comments: Vec<IssueCommentEntry>,
     /// The active draft review, if any.
     pub draft: Option<crate::drafts::DraftView>,
+    /// The most recently sent review from this app, if any.
+    pub last_review: Option<crate::drafts::DraftView>,
 }
 
 pub fn revision_info(c: &Connection, id: i64) -> Result<RevisionInfo> {
@@ -326,6 +328,18 @@ pub fn get_pr(db: &Db, pr_id: i64) -> Result<PrDetail> {
             threads,
             issue_comments,
             draft: match crate::drafts::active_draft_id(c, pr_id)? {
+                Some(id) => Some(crate::drafts::draft_view(c, id)?),
+                None => None,
+            },
+            last_review: match c
+                .query_row(
+                    "SELECT id FROM draft_review WHERE pr_id = ?1 AND status = 'submitted'
+                     ORDER BY submitted_at DESC, id DESC LIMIT 1",
+                    [pr_id],
+                    |r| r.get::<_, i64>(0),
+                )
+                .optional()?
+            {
                 Some(id) => Some(crate::drafts::draft_view(c, id)?),
                 None => None,
             },

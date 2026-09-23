@@ -1,0 +1,25 @@
+query ReviewComments($reviewId: ID!, $after: String) {
+  node(id: $reviewId) {
+    ... on PullRequestReview {
+      id
+      state
+      comments(first: 100, after: $after) {
+        pageInfo {
+          hasNextPage
+          endCursor
+        }
+        nodes {
+          id
+          path
+          line
+          startLine
+          body
+          subjectType
+          replyTo {
+            id
+          }
+        }
+      }
+    }
+  }
+}

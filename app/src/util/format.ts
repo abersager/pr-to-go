@@ -31,3 +31,15 @@ export function imageType(path: string): string | null {
   const ext = path.split(".").pop()?.toLowerCase() ?? "";
   return imageTypes[ext] ?? null;
 }
+
+/** "now", "in 30s", "in 4m" for a future time. */
+export function until(iso: string | null | undefined, now = Date.now()): string {
+  if (!iso) return "";
+  const t = Date.parse(iso);
+  if (Number.isNaN(t)) return "";
+  const s = Math.round((t - now) / 1000);
+  if (s <= 1) return "now";
+  if (s < 90) return `in ${s}s`;
+  if (s < 5400) return `in ${Math.round(s / 60)}m`;
+  return `in ${Math.round(s / 3600)}h`;
+}

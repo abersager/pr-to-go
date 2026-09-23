@@ -1,0 +1,9 @@
+mutation AddReply($threadId: ID!, $reviewId: ID!, $body: String!) {
+  addPullRequestReviewThreadReply(
+    input: { pullRequestReviewThreadId: $threadId, pullRequestReviewId: $reviewId, body: $body }
+  ) {
+    comment {
+      id
+    }
+  }
+}

@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { api } from "../api";
 import type { Draft, DraftStatus, PrDetail, Verdict } from "../types";
-import { ago } from "../util/format";
+import { ago, until } from "../util/format";
+import { AttentionView } from "./AttentionView";
 import { renderMarkdown } from "../util/markdown";
 import { rangeLabel } from "./DraftCard";
 import { openExternal } from "./Html";
@@ -46,6 +47,7 @@ export function ReviewPanel({
   const [preview, setPreview] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [copied, setCopied] = useState(false);
   const timer = useRef<number | undefined>(undefined);
   const chain = useRef<Promise<void>>(Promise.resolve());
   const status: DraftStatus = draft?.status ?? "draft";
@@ -96,6 +98,8 @@ export function ReviewPanel({
 
   const comments = draft?.comments ?? [];
   const own = pr.viewerDidAuthor;
+  // No draft in progress: show the last review that went out.
+  const sent = !draft && pr.lastReview ? pr.lastReview : null;
 
   return (
     <aside className="review-panel">
@@ -106,11 +110,45 @@ export function ReviewPanel({
           Close
         </button>
       </div>
-      <p className={`review-status ${status}`}>{STATUS_TEXT[status]}</p>
-      {draft?.lastError && status !== "draft" && (
-        <p className="error small">
-          Last attempt failed{draft.nextAttemptAt ? `; retrying ${ago(draft.nextAttemptAt)}` : ""}: {draft.lastError}
+      {sent ? (
+        <div className="review-status submitted">
+          Sent {ago(sent.submittedAt)}
+          {sent.submittedUrl && (
+            <>
+              {" · "}
+              <a href={sent.submittedUrl} onClick={(e) => (e.preventDefault(), openExternal(sent.submittedUrl!))}>
+                View on GitHub
+              </a>
+            </>
+          )}
+          <div className="small muted">Anything you write now starts a new review.</div>
+        </div>
+      ) : (
+        <p className={`review-status ${status}`}>{STATUS_TEXT[status]}</p>
+      )}
+      {draft?.lastError && ["queued", "preflight", "staging", "submitting"].includes(status) && (
+        <p className="small retry-line">
+          {draft.lastErrorKind === "offline" ? (
+            <span className="muted">Waiting for a connection.</span>
+          ) : (
+            <span className="error">
+              Last attempt failed{draft.nextAttemptAt ? `; trying again ${until(draft.nextAttemptAt)}` : ""}:{" "}
+              {draft.lastError}
+            </span>
+          )}{" "}
+          <button className="link" onClick={() => void run(async () => api.retryReview(pr.id))}>
+            Try now
+          </button>
         </p>
+      )}
+      {status === "needs_attention" && draft && (
+        <AttentionView
+          pr={pr}
+          draft={draft}
+          onDraft={onDraft}
+          onEdit={() => void run(() => api.unqueueReview(pr.id))}
+          onSignInAgain={() => void api.signOut().then(() => window.location.reload())}
+        />
       )}
       {status === "submitted" && draft?.submittedUrl && (
         <p>
@@ -206,12 +244,28 @@ export function ReviewPanel({
             Submit review
           </button>
         )}
-        {(status === "queued" || status === "needs_attention") && (
+        {["queued", "preflight", "staging", "submitting"].includes(status) && (
           <button disabled={busy} onClick={() => void run(() => api.unqueueReview(pr.id))}>
             Edit review
           </button>
         )}
-        {draft && ["draft", "queued", "needs_attention"].includes(status) && (
+        {draft && status !== "submitted" && (
+          <button
+            disabled={busy}
+            title="Copy the whole review as Markdown"
+            onClick={() =>
+              void run(async () => {
+                const md = await api.exportReviewMarkdown(pr.id);
+                await navigator.clipboard.writeText(md);
+                setError(null);
+                setCopied(true);
+              })
+            }
+          >
+            {copied ? "Copied" : "Copy as Markdown"}
+          </button>
+        )}
+        {draft && !["submitted", "discarded"].includes(status) && (
           <button
             disabled={busy}
             onClick={() => {

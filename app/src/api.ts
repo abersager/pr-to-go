@@ -6,6 +6,8 @@ import type {
   CoreEvent,
   Draft,
   NewComment,
+  OutboxItem,
+  Resolution,
   Verdict,
   FileDiff,
   PrDetail,
@@ -75,6 +77,10 @@ export const api = {
   queueReview: (prId: number) => call<Draft>("queue_review", { prId }),
   unqueueReview: (prId: number) => call<Draft>("unqueue_review", { prId }),
   discardReview: (prId: number) => call<void>("discard_review", { prId }),
+  outbox: () => call<OutboxItem[]>("outbox"),
+  retryReview: (prId: number) => call<void>("retry_review", { prId }),
+  exportReviewMarkdown: (prId: number) => call<string>("export_review_markdown", { prId }),
+  resolveReview: (prId: number, resolution: Resolution) => call<Draft>("resolve_review", { prId, resolution }),
 };
 
 export function onCoreEvent(cb: (e: CoreEvent) => void): Promise<UnlistenFn> {

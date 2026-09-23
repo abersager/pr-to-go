@@ -143,6 +143,7 @@ export type PrDetail = PrSummary & {
   threads: ThreadEntry[];
   issueComments: IssueCommentEntry[];
   draft: Draft | null;
+  lastReview: Draft | null;
 };
 
 export type LineKind = "context" | "add" | "del";
@@ -265,4 +266,57 @@ export type NewComment = {
   startLine?: number | null;
   replyToThread?: string | null;
   body: string;
+};
+
+export type Reason =
+  | { kind: "head_moved"; from_revision: number; to_revision: number; comments: number[]; verdict_stale: boolean }
+  | { kind: "pr_state_changed"; state: string }
+  | { kind: "pr_locked" }
+  | { kind: "repo_archived" }
+  | { kind: "new_blocking_review"; review: string; author: string | null }
+  | { kind: "existing_pending_review"; review: string }
+  | { kind: "reply_target_gone"; comment: number }
+  | { kind: "comment_rejected"; comment: number | null; message: string }
+  | { kind: "reviewed_commit_unavailable"; message: string }
+  | { kind: "auth"; message: string }
+  | { kind: "permission"; message: string; sso_url: string | null }
+  | { kind: "pr_gone" };
+
+export type Attention = { reasons: Reason[]; acknowledged: string[] };
+
+export type CommentAction = "remap" | "to_file" | "to_summary" | "drop" | "keep";
+
+export type CommentResolution = {
+  id: number;
+  action: CommentAction;
+  side?: Side | null;
+  line?: number | null;
+  startSide?: Side | null;
+  startLine?: number | null;
+  path?: string | null;
+};
+
+export type Resolution = {
+  acknowledge?: string[];
+  targetMode?: "current_head" | "reviewed_commit";
+  comments?: CommentResolution[];
+  verdict?: Verdict | null;
+};
+
+export type OutboxItem = {
+  draftReviewId: number;
+  prId: number;
+  repo: string;
+  number: number;
+  title: string;
+  status: DraftStatus;
+  verdict: Verdict | null;
+  comments: number;
+  queuedAt: string | null;
+  submittedAt: string | null;
+  submittedUrl: string | null;
+  lastError: string | null;
+  lastErrorKind: string | null;
+  nextAttemptAt: string | null;
+  attention: Attention | null;
 };

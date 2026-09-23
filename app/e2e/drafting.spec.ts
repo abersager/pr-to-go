@@ -1,5 +1,10 @@
 import { expect, test } from "@playwright/test";
 
+// Every test starts from the same demo world and a fresh app.
+test.beforeEach(async ({ request }) => {
+  await request.post("http://127.0.0.1:1421/__demo/reset");
+});
+
 test("draft a review: lines, ranges, suggestions, replies, summary, queue", async ({ page }) => {
   await page.goto("/#/pr/1/files/src%2Fretry.rs");
   const diff = page.locator(".diff-scroll");
