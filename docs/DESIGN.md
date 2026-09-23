@@ -1,6 +1,8 @@
 # PR to Go: Design
 
-**Status:** Phase 1 draft, awaiting approval · **Date:** 2026-09-23
+**Status:** Approved, and built in Phase 2. §15 records what exists, where
+the code differs from this document, and what's still open. · **Date:**
+2026-09-23
 
 PR to Go is a desktop app for reviewing GitHub pull requests offline. You sync
 PRs while you have a connection. You review them offline in a full diff viewer.
@@ -16,7 +18,7 @@ This document covers:
 5. The sync and outbox state machines.
 6. How we'll test it and in what order we'll build it.
 
-Section 14 lists the decisions that need your approval.
+Section 14 lists the decisions we asked for (all approved as recommended).
 
 ---
 
@@ -427,15 +429,15 @@ flowchart LR
 - **Background work.** Sync and the outbox run as tokio tasks in the core.
   They keep going when the UI changes screens. The UI subscribes to events
   such as `pr.updated`, `sync.progress` and `outbox.changed`.
-- **Database access.** There is one writer connection, fed by a queue, plus a
-  pool of readers. **A write transaction is never held across a network
-  call:** we fetch first, then write in a short transaction. Hubtty holds its
-  global lock across HTTP calls.
+- **Database access.** There is one writer connection and one reader
+  connection, each behind a lock. **A write transaction is never held across
+  a network call:** we fetch first, then write in a short transaction. Hubtty
+  holds its global lock across HTTP calls.
 - **Untrusted content.** PR bodies and comments are attacker-controlled on
   public repos. The webview therefore uses:
   - DOMPurify on all GitHub HTML;
   - a strict CSP with no remote loads;
-  - images served only from a local `asset://` protocol;
+  - images and file contents served only from a local `prtg://` scheme;
   - Tauri's capability allow-list and isolation pattern;
   - external links opened in the system browser.
 - **Authentication.** On first run you choose one of:
@@ -510,8 +512,10 @@ flowchart LR
   prtogo.sqlite            # WAL mode
   blobs/ab/cdef…           # blobs > 1 MiB, named by git blob id (smaller ones in SQLite)
   assets/<sha256>          # cached images
-  logs/
 ```
+
+Logs go to the platform's log folder (`~/Library/Logs/com.abersager.prtogo`
+on macOS). The token lives in the OS keychain.
 
 ### 7.3 Schema
 
@@ -970,3 +974,104 @@ Each slice is small, works on its own, and ends with a commit.
 | D5 | Target platforms for v1 | **macOS first-class**; Windows and Linux built in CI with smoke tests only. |
 | D6 | Project license | **Apache-2.0.** Compatible with Hubtty (with a NOTICE). No prr code, because prr is GPL-2.0. |
 | D7 | "Viewed" checkboxes on files | **Local only in v1.** Syncing them through `markFileAsViewed` can come later. |
+
+---
+
+## 15. Implementation status
+
+As of 2026-09-23. Everything in the §13 plan is built, except the items under
+"Still open".
+
+### 15.1 What exists
+
+| Area | Where | Notes |
+|---|---|---|
+| Storage, blob store, migrations | `crates/core/src/db`, `blobstore.rs` | Migrations are append-only from `002` on. `001` was still being edited during development, before any release. |
+| GitHub client | `crates/core/src/github` | Errors are classified per §9/§10. Rate limits are tracked per budget, with an outbox reserve. Requests are logged without headers or bodies. |
+| Sync | `sync.rs` | §9.2 steps 1–8. Discussion is fetched in parallel, and blob batches four at a time. |
+| Inbox | `inbox.rs` | Repo and search subscriptions, index polling, deep sync (3 at a time, drafts first), readiness, GC. |
+| CI checks | `checks.rs` | Re-polls pending checks: 30 s doubling to 5 min, 20 polls per head. |
+| Drafting | `drafts.rs` | §2 validation rules, anchor snapshots. |
+| Outbox | `outbox.rs` | §10 state machine and protocol, reconciliation, crash points for tests. |
+| Remap | `remap.rs` | §11: exact, fuzzy (threshold 0.6), orphaned. |
+| Generated files | `generated.rs` | Built-in patterns, root `.gitattributes`, the user's patterns. |
+| Desktop shell | `app/src-tauri` | One `core` command, the `prtg://` scheme, the isolation pattern, file logs. |
+| UI | `app/src` | Inbox, conversation, virtualized split/unified diffs, Shiki in a worker, composer, review panel, Needs attention, settings. |
+
+**Tests.**
+
+- Rust: 87 tests. They are unit tests plus integration tests against the fake
+  GitHub: sync, drafts, outbox (the §12 scenarios), remap, inbox, checks and
+  auth. The outbox tests include a crash at every step boundary and a timeout
+  after commit.
+- UI: 19 Vitest tests.
+- End to end: 8 Playwright tests, running the real UI and core against the
+  fake. One of them is a large-PR performance check.
+- All GraphQL documents are validated against GitHub's published schema.
+- One read-only live test syncs public PRs from real GitHub. It's ignored
+  by default, and passed on 2026-09-23. Nothing has been sent to real GitHub
+  yet (see 15.3).
+- CI runs all of the above. It also builds unsigned installers for macOS,
+  Linux and Windows.
+
+**Measured.** A 400-file PR with two 20,000-line files, on an M-series Mac:
+
+- With the release core against the local fake, sync takes about 170 ms. That
+  measures our processing only, not network time.
+- The file list renders in about 120 ms.
+- The 20,000-line file opens in about 200 ms.
+- Scrolling to its end takes under 40 ms.
+
+### 15.2 Where the code differs from the design
+
+- **Scheduling (§9.2).** There is no general priority queue with promotion.
+  Instead:
+  - Syncs of the same PR are serialized.
+  - The inbox deep-syncs PRs with drafts first.
+  - User actions run immediately.
+  - The outbox runs in its own loop, with first claim on the rate limit.
+
+  So far this has been enough.
+- **Rate limits (§6).**
+  - Budgets come from the `x-ratelimit-*` headers, not from GraphQL's
+    `rateLimit` field.
+  - Secondary limits back off from 60 s to 10 min, as in Hubtty. Unlike
+    Hubtty, background work doesn't give up after five in a row: it keeps
+    retrying at the 10-minute cap, and the outbox shows the wait.
+- **Blob batches (§6)** are sized by count (25), not by bytes. Large text
+  arrives truncated and is fetched raw over REST.
+- **Generated files (§8).** The flag is computed when the file list is read,
+  from the stored root `.gitattributes`, so changed patterns apply at once.
+  Nested `.gitattributes` files are not read.
+
+  The file is fetched in the first blob batch, with
+  `object(expression: "<head>:.gitattributes")`, which is `null` when the
+  file doesn't exist. `Commit.file(path:)` looks neater, but GitHub adds a
+  `NOT_FOUND` error for a missing file. The schema check can't catch that;
+  the live test did.
+- **Check re-polling** keeps its schedule in memory. After a restart it
+  starts again from 30 s.
+- **Database access (§5).** One reader connection instead of a pool. The
+  locks aren't reentrant, so a nested read inside a read (or a write inside a
+  write) on one thread panics with a clear message instead of deadlocking.
+
+### 15.3 Still open
+
+- **Nothing has been sent to real GitHub yet.** The outbox protocol is tested
+  only against the fake. The first live run should use a throwaway
+  repository, together with the next item.
+- **The assumptions in §3 are not yet tested live.**
+  - (a) A review on a commit that a force-push removed.
+  - (b) Line comments on expanded context outside the hunks.
+
+  Testing them needs a throwaway repository where we may open a PR and post
+  reviews. Until then, v1 assumes "no" to both, as planned.
+- **Signed and notarized macOS builds.** These need an Apple Developer ID
+  certificate and notarization credentials as CI secrets. CI builds unsigned
+  installers today.
+- **Packaged-app smoke tests on Windows and Linux.** Those platforms are
+  built but not launched in CI. The E2E tests run the UI in Chromium, not in
+  the platform webviews.
+- **Deliberately later:** syncing "viewed" to GitHub (D7), an optional git
+  backend (D2), auto-submitting clean remaps (D3), mobile.
+
