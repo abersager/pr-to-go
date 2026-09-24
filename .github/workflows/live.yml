@@ -1,0 +1,33 @@
+name: Live GitHub
+
+# The tests that talk to real GitHub: syncing public PRs, and sending reviews
+# to a throwaway repository (crates/core/tests/live_write.rs). They open and
+# close pull requests there, so they run weekly and by hand, not on every push.
+# PLAYGROUND_TOKEN is a fine-grained token for that repository only.
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 6 * * 1" # Mondays
+
+concurrency: live-github
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  live:
+    name: Live tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev pkg-config
+      - run: rustup show
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test -p pr-to-go-core --test live --test live_write -- --ignored --nocapture
+        env:
+          GITHUB_TOKEN: ${{ secrets.PLAYGROUND_TOKEN }}
+          LIVE_WRITE_REPO: abersager/pr-to-go-playground
