@@ -1039,6 +1039,11 @@ As of 2026-09-23. Everything in the §13 plan is built, except the items under
     can't place. It also checks the API behaviour listed in §3. It passed on
     2026-09-24 against `abersager/pr-to-go-playground`, in about a minute,
     and closes the PRs it opens.
+
+  The **Live GitHub** workflow runs both every Monday and by hand, with a
+  fine-grained token for the playground only (`PLAYGROUND_TOKEN`). They
+  passed with it, so a fine-grained token is enough to sync and send
+  reviews.
 - CI runs all of the above. It also builds unsigned installers for macOS,
   Linux and Windows.
 
@@ -1085,8 +1090,6 @@ As of 2026-09-23. Everything in the §13 plan is built, except the items under
 
 ### 15.3 Still open
 
-- **The live tests run by hand, not in CI.** `live_write.rs` needs a token
-  that can push to a throwaway repository.
 - **Signed and notarized macOS builds.** These need an Apple Developer ID
   certificate and notarization credentials as CI secrets. CI builds unsigned
   installers today.

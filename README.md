@@ -59,7 +59,8 @@ pnpm tauri build           # package the app (unsigned for now)
 Two tests talk to real GitHub and are skipped unless asked for. `live` syncs
 public PRs and changes nothing. `live_write` opens pull requests in a
 repository you name, sends reviews on them, and closes them again (about a
-minute), so point it at a throwaway repository you can push to:
+minute), so point it at a throwaway repository you can push to. The **Live
+GitHub** workflow runs both every Monday against our playground repository.
 
 ```sh
 GITHUB_TOKEN=$(gh auth token) cargo test -p pr-to-go-core --test live -- --ignored
