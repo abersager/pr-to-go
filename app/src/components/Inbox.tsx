@@ -1,6 +1,7 @@
 import { useState } from "react";
 import type { OutboxItem, PrSummary, Readiness } from "../types";
 import { ago, bytes, until } from "../util/format";
+import { withShortcut } from "../commands";
 import { Browse } from "./Browse";
 
 export function SyncBadge({ pr }: { pr: PrSummary }) {
@@ -72,6 +73,8 @@ export function Inbox({
   onSettings,
   onFollowReviewRequests,
   onBrowseOpen,
+  mode,
+  onMode,
 }: {
   prs: PrSummary[];
   selected: number | null;
@@ -89,8 +92,9 @@ export function Inbox({
   onFollowReviewRequests: () => void;
   /** A PR picked under Browse (already added and synced). */
   onBrowseOpen: (id: number) => void;
+  mode: "inbox" | "browse";
+  onMode: (mode: "inbox" | "browse") => void;
 }) {
-  const [mode, setMode] = useState<"inbox" | "browse">("inbox");
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -101,7 +105,8 @@ export function Inbox({
           role="tab"
           aria-selected={mode === "inbox"}
           className={mode === "inbox" ? "on" : ""}
-          onClick={() => setMode("inbox")}
+          onClick={() => onMode("inbox")}
+          title={withShortcut("Inbox", "view.inbox")}
         >
           Inbox
         </button>
@@ -109,7 +114,8 @@ export function Inbox({
           role="tab"
           aria-selected={mode === "browse"}
           className={mode === "browse" ? "on" : ""}
-          onClick={() => setMode("browse")}
+          onClick={() => onMode("browse")}
+          title={withShortcut("Browse", "view.browse")}
         >
           Browse
         </button>
@@ -135,6 +141,7 @@ export function Inbox({
             }}
           >
             <input
+              id="add-pr-input"
               placeholder="Add a PR: URL or owner/repo#123"
               value={input}
               onChange={(e) => setInput(e.target.value)}
@@ -146,7 +153,11 @@ export function Inbox({
             {error && <p className="error small">{error}</p>}
           </form>
           <div className="inbox-head">
-            <button onClick={onSyncAll} disabled={syncing} title="Sync everything you follow, for offline review">
+            <button
+              onClick={onSyncAll}
+              disabled={syncing}
+              title={withShortcut("Sync everything you follow, for offline review", "inbox.syncAll")}
+            >
               {syncing ? (progress && progress.total > 0 ? `Syncing ${progress.done}/${progress.total}…` : "Checking…") : "Sync all"}
             </button>
             {readiness && readiness.total > 0 && (
@@ -155,7 +166,7 @@ export function Inbox({
               </span>
             )}
             <span className="spacer" />
-            <button className="icon-button" onClick={onSettings} title="What to sync">
+            <button className="icon-button" onClick={onSettings} title={withShortcut("Settings", "app.settings")}>
               ⚙
             </button>
           </div>

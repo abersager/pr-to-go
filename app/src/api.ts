@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import type {
   AuthStatus,
   Connectivity,
@@ -34,6 +35,13 @@ export class ApiError extends Error {
 
 /** Running inside the desktop app (vs. a browser against `prtg-dev`). */
 export const inTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+
+/** Copies text. WebKit's clipboard API refuses once a click handler has
+ * awaited anything, so the desktop app copies natively. */
+export async function copyText(text: string): Promise<void> {
+  if (inTauri) await writeText(text);
+  else await navigator.clipboard.writeText(text);
+}
 
 function toApiError(e: unknown): ApiError {
   const err = e as { message?: string; kind?: ApiError["kind"] };

@@ -27,10 +27,13 @@ and verdicts wait in an outbox until you're back online.
   - existing review threads;
   - a snapshot of CI status, re-checked while checks are still running.
 - **Review offline** in side-by-side or unified diffs with syntax
-  highlighting. Generated files, such as lockfiles and anything marked
+  highlighting and find (⌘F). Tick files off as you go: **Viewed, next file**
+  (⌘D) marks the current one and opens the next unviewed file. Generated files, such as lockfiles and anything marked
   `linguist-generated`, start collapsed. Draft inline comments on lines or
   ranges, replies, suggested changes, a summary and a verdict. Drafts are
   saved locally as you type.
+- **Keyboard first.** Everything is in the macOS menu bar with a shortcut;
+  **Help → Keyboard Shortcuts** (⌘/) lists them all.
 - **The outbox** submits each review as a single GitHub review when you
   reconnect. If the PR changed while you were away, it stops and shows you
   what moved, so you can remap, keep or drop each comment instead of having

@@ -1,6 +1,7 @@
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { type CSSProperties, useMemo, useRef, useState } from "react";
+import { type CSSProperties, Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { api, localUrl } from "../api";
+import { findMatches, type Mark, splitAtMarks } from "../diff/find";
 import { HIGHLIGHT_MAX_CHARS, type LineTokens, type Token, useHighlight } from "../diff/highlight";
 import {
   type Cell,
@@ -20,13 +21,22 @@ import { DraftCard, rangeLabel } from "./DraftCard";
 import { ReplyArea } from "./ReplyArea";
 import { ThreadView } from "./Thread";
 
-function Code({ text, tokens }: { text: string; tokens: Token[] | undefined }) {
+function Code({ text, tokens, marks }: { text: string; tokens: Token[] | undefined; marks?: Mark[] }) {
   // Only use tokens if they're for exactly this text (they come from the
   // stored file; the row text comes from GitHub's patch).
-  if (tokens && tokens.map((t) => t[0]).join("") === text) {
-    return (
-      <>
-        {tokens.map((t, i) => (
+  const useTokens = !!tokens && tokens.map((t) => t[0]).join("") === text;
+  const parts = splitAtMarks(useTokens ? tokens!.map((t) => t[0]) : [text], marks ?? []);
+  return (
+    <>
+      {parts.map((part, i) => {
+        const content = part.mark ? (
+          <mark className={`find-hit${part.mark.current ? " current" : ""}`}>{part.text}</mark>
+        ) : (
+          part.text
+        );
+        if (!useTokens) return <Fragment key={i}>{content}</Fragment>;
+        const t = tokens![part.piece];
+        return (
           <span
             key={i}
             className="tk"
@@ -39,13 +49,12 @@ function Code({ text, tokens }: { text: string; tokens: Token[] | undefined }) {
               } as CSSProperties
             }
           >
-            {t[0]}
+            {content}
           </span>
-        ))}
-      </>
-    );
-  }
-  return <>{text}</>;
+        );
+      })}
+    </>
+  );
 }
 
 const marker = (kind: string) => (kind === "add" ? "+" : kind === "del" ? "−" : " ");
@@ -84,6 +93,10 @@ export type DiffViewProps = {
   onNotEditable: () => void;
   fileComposer: boolean;
   onFileComposer: (open: boolean) => void;
+  /** Find in the diff: the text, and which match is current. */
+  find?: { query: string; index: number };
+  /** How many matches the find has on screen. */
+  onFindCount?: (n: number) => void;
 };
 
 export function DiffView({
@@ -98,6 +111,8 @@ export function DiffView({
   onNotEditable,
   fileComposer,
   onFileComposer,
+  find,
+  onFindCount,
 }: DiffViewProps) {
   // An added or removed file has nothing to show on one side.
   const mode: Mode = diff.changeType === "added" || diff.changeType === "removed" ? "unified" : preferred;
@@ -164,6 +179,24 @@ export function DiffView({
     getItemKey: (i) => rows[i].key,
     overscan: 40,
   });
+
+  // Find: every match on screen, the current one scrolled into view.
+  const query = find?.query ?? "";
+  const matches = useMemo(() => findMatches(rows, query), [rows, query]);
+  const current = matches.length ? matches[(((find?.index ?? 0) % matches.length) + matches.length) % matches.length] : null;
+  const marksAt = useMemo(() => {
+    const m = new Map<string, Mark[]>();
+    for (const x of matches) {
+      const k = `${x.row}:${x.side}`;
+      m.set(k, [...(m.get(k) ?? []), { start: x.start, end: x.end, current: x === current }]);
+    }
+    return m;
+  }, [matches, current]);
+  useEffect(() => onFindCount?.(matches.length), [matches.length, onFindCount]);
+  useEffect(() => {
+    if (current) virtualizer.scrollToIndex(current.row, { align: "center" });
+    // Scroll when the current match changes, not on every re-render.
+  }, [current?.row, current?.start, current?.side, query]);
 
   const fileThreads = threads.filter((t) => t.path === diff.path && t.subjectType === "FILE");
   const outdated = threads.filter((t) => t.path === diff.path && t.subjectType === "LINE" && t.isOutdated);
@@ -254,13 +287,13 @@ export function DiffView({
     </span>
   );
 
-  const renderCell = (c: Cell | null) =>
+  const renderCell = (c: Cell | null, row: number) =>
     c ? (
       <>
         {lineNo(c.side, c.no, c.hunk, c.commentable, c.kind)}
         <span className={`code ${c.kind}`}>
           <span className="mk">{marker(c.kind)}</span>
-          <Code text={c.text} tokens={tok(c.side, c.no)} />
+          <Code text={c.text} tokens={tok(c.side, c.no)} marks={marksAt.get(`${row}:${c.side}`)} />
           {c.noNewline && <span className="nonl" title="No newline at end of file">⏎̸</span>}
         </span>
       </>
@@ -310,7 +343,7 @@ export function DiffView({
             {lineNo(side, no, r.hunk, r.commentable, "")}
             <span className={`code ${r.kind}`}>
               <span className="mk">{marker(r.kind)}</span>
-              <Code text={r.text} tokens={tok(side, no)} />
+              <Code text={r.text} tokens={tok(side, no)} marks={marksAt.get(`${i}:${side}`)} />
               {r.noNewline && <span className="nonl" title="No newline at end of file">⏎̸</span>}
             </span>
           </div>
@@ -319,8 +352,8 @@ export function DiffView({
       case "split":
         return (
           <div className={`line split${sel}`}>
-            {renderCell(r.left)}
-            {renderCell(r.right)}
+            {renderCell(r.left, i)}
+            {renderCell(r.right, i)}
           </div>
         );
       case "thread":
@@ -398,9 +431,11 @@ export function DiffView({
   return (
     <div className="diff">
       {diff.source === "local" && (
-        <p className="notice warn">
-          GitHub sent no diff for this file (it's too large). This diff was computed locally; line comments are off.
-        </p>
+        <details className="notice warn local-diff">
+          <summary>Computed locally · line comments are off</summary>
+          GitHub sent no diff for this file because it's too large, so this diff was computed here. GitHub only accepts
+          line comments on lines in its own diff, so you can comment on the file as a whole instead.
+        </details>
       )}
       {diff.contentStatus !== "ok" && diff.contentStatus !== "binary_skipped" && (
         <p className="notice warn">The file contents aren't available offline ({diff.contentStatus.replace("_", " ")}).</p>

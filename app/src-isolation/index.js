@@ -8,6 +8,17 @@ const ALLOWED = new Set([
   "plugin:event|listen",
   "plugin:event|unlisten",
   "plugin:opener|open_url",
+  "plugin:clipboard-manager|write_text",
+  "plugin:webview|set_webview_zoom",
+  // Building the menu bar and keeping its items' state current.
+  "plugin:menu|new",
+  "plugin:menu|append",
+  "plugin:menu|set_as_app_menu",
+  "plugin:menu|set_as_windows_menu_for_nsapp",
+  "plugin:menu|set_as_help_menu_for_nsapp",
+  "plugin:menu|set_enabled",
+  "plugin:menu|set_checked",
+  "plugin:menu|set_text",
 ]);
 
 window.__TAURI_ISOLATION_HOOK__ = (payload) => {

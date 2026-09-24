@@ -997,6 +997,7 @@ As of 2026-09-23. Everything in the §13 plan is built, except the items under
 | Remap | `remap.rs` | §11: exact, fuzzy (threshold 0.6), orphaned. |
 | Generated files | `generated.rs` | Built-in patterns, root `.gitattributes`, the user's patterns. |
 | Desktop shell | `app/src-tauri` | One `core` command, the `prtg://` scheme, the isolation pattern, file logs. |
+| Commands | `app/src/commands.ts`, `menu.ts` | One list of commands drives the native menu bar (built through Tauri's menu API, items greyed out and checked as the screen changes), the shortcuts in the browser build, and the shortcuts overview. |
 | UI | `app/src` | Inbox, conversation, virtualized split/unified diffs, Shiki in a worker, composer, review panel, Needs attention, settings. |
 
 **Tests.**
@@ -1005,8 +1006,8 @@ As of 2026-09-23. Everything in the §13 plan is built, except the items under
   GitHub: sync, drafts, outbox (the §12 scenarios), remap, inbox, checks,
   auth and browse. The outbox tests include a crash at every step boundary
   and a timeout after commit.
-- UI: 19 Vitest tests.
-- End to end: 10 Playwright tests, running the real UI and core against the
+- UI: 26 Vitest tests.
+- End to end: 14 Playwright tests, running the real UI and core against the
   fake. One of them is a large-PR performance check.
 - All GraphQL documents are validated against GitHub's published schema.
 - One read-only live test syncs public PRs from real GitHub. It's ignored

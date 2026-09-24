@@ -121,6 +121,7 @@ fn serve(core: &Core, uri: &tauri::http::Uri) -> Response<Vec<u8>> {
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_clipboard_manager::init())
         .register_asynchronous_uri_scheme_protocol("prtg", |ctx, request, responder| {
             let core = ctx.app_handle().state::<AppState>().0.clone();
             let uri = request.uri().clone();

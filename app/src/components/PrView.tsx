@@ -1,5 +1,6 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { api } from "../api";
+import { type CommandId, useCommand, withShortcut } from "../commands";
 import type { Draft } from "../types";
 import { ago, plural, short } from "../util/format";
 import type { Route } from "../util/route";
@@ -9,7 +10,7 @@ import { FilesView } from "./FilesView";
 import { openExternal } from "./Html";
 import { SyncBadge } from "./Inbox";
 import { RebaseDialog } from "./RebaseDialog";
-import { ReviewPanel } from "./ReviewPanel";
+import { ReviewPanel, reviewCommands } from "./ReviewPanel";
 
 export function PrView({
   prId,
@@ -35,6 +36,9 @@ export function PrView({
   const [panel, setPanel] = useState(openReview);
   const [notice, setNotice] = useState<string | null>(null);
   const [rebasing, setRebasing] = useState(false);
+  // A review command chosen while the panel was closed; the panel runs it.
+  const [panelCommand, setPanelCommand] = useState<CommandId | null>(null);
+  const clearPanelCommand = useCallback(() => setPanelCommand(null), []);
   const revisionId = pr?.revision?.id;
 
   useEffect(() => {
@@ -50,19 +54,6 @@ export function PrView({
     }
   }, [openReview, onReviewOpened]);
 
-  if (error) return <p className="error pad">{error.message}</p>;
-  if (!pr) return <p className="muted pad">Loading…</p>;
-
-  const editable = !draft || draft.status === "draft";
-  const notEditable = () => {
-    setNotice("This review is queued. Choose Edit review to change it.");
-    setPanel(true);
-  };
-  const onDraft = (d: Draft | null) => {
-    setDraft(d);
-    setNotice(null);
-  };
-
   const sync = async () => {
     setSyncing(true);
     setSyncError(null);
@@ -74,6 +65,37 @@ export function PrView({
     } finally {
       setSyncing(false);
     }
+  };
+
+  useCommand("pr.sync", () => void sync(), { enabled: !!pr && !syncing });
+  useCommand("pr.openOnGitHub", () => pr && openExternal(pr.url), { enabled: !!pr });
+  useCommand("view.conversation", () => setTab("conversation"), { enabled: !!pr, checked: tab === "conversation" });
+  useCommand("view.files", () => setTab("files"), { enabled: !!pr, checked: tab === "files" });
+  useCommand("review.panel", () => setPanel((p) => !p), { enabled: !!pr, checked: panel });
+  for (const c of reviewCommands(pr ?? null, draft)) {
+    // Opens the panel, which then runs the command. A fixed list, so the
+    // hooks are always called in the same order.
+    useCommand(
+      c.id,
+      () => {
+        setPanel(true);
+        setPanelCommand(c.id);
+      },
+      { enabled: c.enabled, checked: c.checked },
+    );
+  }
+
+  if (error) return <p className="error pad">{error.message}</p>;
+  if (!pr) return <p className="muted pad">Loading…</p>;
+
+  const editable = !draft || draft.status === "draft";
+  const notEditable = () => {
+    setNotice("This review is queued. Choose Edit review to change it.");
+    setPanel(true);
+  };
+  const onDraft = (d: Draft | null) => {
+    setDraft(d);
+    setNotice(null);
   };
 
   const draftCount = draft?.comments.length ?? 0;
@@ -108,19 +130,27 @@ export function PrView({
                 at {short(pr.revision.headOid)}
               </span>
             )}
-            <a href={pr.url} onClick={(e) => (e.preventDefault(), openExternal(pr.url))}>
+            <a
+              href={pr.url}
+              title={withShortcut("Open on GitHub", "pr.openOnGitHub")}
+              onClick={(e) => (e.preventDefault(), openExternal(pr.url))}
+            >
               Open on GitHub
             </a>
           </div>
           <div className="pr-sync small">
             <SyncBadge pr={pr} />
             <span className="muted">Synced {ago(pr.lastSyncedAt)}</span>
-            <button onClick={sync} disabled={syncing}>
+            <button onClick={sync} disabled={syncing} title={withShortcut("Sync this pull request", "pr.sync")}>
               {syncing ? "Syncing…" : "Sync now"}
             </button>
             {syncError && <span className="error">{syncError}</span>}
             <span className="spacer" />
-            <button className={`review-button ${draft ? draft.status : ""}`} onClick={() => setPanel(!panel)}>
+            <button
+              className={`review-button ${draft ? draft.status : ""}`}
+              onClick={() => setPanel(!panel)}
+              title={withShortcut(panel ? "Hide your review" : "Show your review", "review.panel")}
+            >
               Review{draftCount > 0 && <span className="count">{draftCount}</span>}
               {draft && draft.status !== "draft" && <span className="small"> · {draft.status.replace("_", " ")}</span>}
             </button>
@@ -187,6 +217,8 @@ export function PrView({
           onDraft={onDraft}
           onClose={() => setPanel(false)}
           onOpenFile={(file) => onRoute({ tab: "files", file })}
+          command={panelCommand}
+          onCommandDone={clearPanelCommand}
         />
       )}
     </div>

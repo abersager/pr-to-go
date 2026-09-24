@@ -1,7 +1,23 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "The main window may call PR to Go commands and open links in the system browser.",
+  "description": "The main window may call PR to Go commands, build its menu bar, zoom, copy text and open web links in the system browser.",
   "windows": ["main"],
-  "permissions": ["core:event:default", "opener:allow-open-url"]
+  "permissions": [
+    "core:event:default",
+    "core:menu:allow-new",
+    "core:menu:allow-append",
+    "core:menu:allow-set-as-app-menu",
+    "core:menu:allow-set-as-windows-menu-for-nsapp",
+    "core:menu:allow-set-as-help-menu-for-nsapp",
+    "core:menu:allow-set-enabled",
+    "core:menu:allow-set-checked",
+    "core:menu:allow-set-text",
+    "core:webview:allow-set-webview-zoom",
+    "clipboard-manager:allow-write-text",
+    {
+      "identifier": "opener:allow-open-url",
+      "allow": [{ "url": "https://*" }, { "url": "http://*" }]
+    }
+  ]
 }

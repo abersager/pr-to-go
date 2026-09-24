@@ -48,8 +48,17 @@
 
 * { box-sizing: border-box; }
 body { margin: 0; background: var(--bg); }
+/* Like a native app: the interface itself isn't selectable text (so ⌘A
+   doesn't select every label); content is. */
+body { -webkit-user-select: none; user-select: none; cursor: default; }
+.markdown, .code, .draft-card, .thread, .composer-preview, .pr-header h1, .diff-title, .commits, .checks,
+.draft-snippet, .error, .notice, pre, code, kbd {
+  -webkit-user-select: text;
+  user-select: text;
+}
 button, input { font: inherit; color: inherit; }
 button {
+  white-space: nowrap;
   background: var(--bg-soft);
   border: 1px solid var(--border);
   border-radius: 6px;
@@ -104,7 +113,6 @@ code { font-family: var(--mono); font-size: 0.92em; }
   border-bottom: 1px solid var(--border);
   background: var(--bg-soft);
 }
-.brand { font-weight: 600; }
 .pill { display: inline-flex; align-items: center; gap: 6px; border-radius: 12px; font-size: 12px; }
 .pill .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
 .pill.online .dot { background: var(--ok); }
@@ -226,12 +234,14 @@ code { font-family: var(--mono); font-size: 0.92em; }
 .file-list li.generated .path { color: var(--muted); }
 .tag { font-size: 10px; color: var(--muted); border: 1px solid var(--border); border-radius: 3px; padding: 0 4px; }
 .generated-note p { margin: 0 0 8px; }
+.local-diff summary { cursor: pointer; }
+.local-diff[open] summary { margin-bottom: 4px; }
 .patterns-form { display: flex; gap: 8px; align-items: flex-start; }
 .patterns-form textarea { flex: 1; font-family: var(--mono); font-size: 12px; }
 .patterns-form textarea::placeholder { color: var(--muted); opacity: 0.7; }
 .file-diff { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
-.diff-toolbar { display: flex; align-items: center; gap: 6px; padding: 6px 10px; border-bottom: 1px solid var(--border); }
-.diff-title { font-family: var(--mono); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.diff-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 6px 10px; border-bottom: 1px solid var(--border); }
+.diff-title { font-family: var(--mono); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 60px; flex: 0 1 auto; }
 .segmented { display: inline-flex; }
 .segmented button { border-radius: 0; }
 .segmented button:first-child { border-radius: 6px 0 0 6px; }
@@ -337,16 +347,24 @@ code { font-family: var(--mono); font-size: 0.92em; }
 .review-panel h2 { font-size: 16px; margin: 0; }
 .review-panel section { margin: 14px 0; }
 .panel-label { display: flex; align-items: center; font-weight: 600; font-size: 12px; margin-bottom: 6px; }
-.review-status { font-size: 13px; padding: 6px 8px; border-radius: 6px; background: var(--bg); border: 1px solid var(--border); }
-.review-status.queued { border-color: var(--accent); }
-.review-status.needs_attention { border-color: var(--warn); color: var(--warn); }
-.review-status.submitted { border-color: var(--ok); color: var(--ok); }
+/* The review's state: a line of text with a coloured dot, not a field. */
+.review-status { font-size: 13px; margin: 0; padding-left: 14px; position: relative; color: var(--muted); }
+.review-status::before { content: ""; position: absolute; left: 0; top: 0.45em; width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
+.review-status.queued, .review-status.preflight, .review-status.staging, .review-status.submitting { color: var(--accent); }
+.review-status.queued::before, .review-status.preflight::before, .review-status.staging::before, .review-status.submitting::before { background: var(--accent); }
+.review-status.needs_attention { color: var(--warn); }
+.review-status.needs_attention::before { background: var(--warn); }
+.review-status.submitted { color: var(--ok); }
+.review-status.submitted::before { background: var(--ok); }
+.own-pr-note { margin: 0 0 6px; }
+.confirm-discard p { margin: 0 0 8px; }
+button.danger { background: var(--err); border-color: var(--err); color: #fff; }
 .verdict { display: flex; gap: 6px; align-items: center; padding: 2px 0; }
 .draft-list { list-style: none; padding: 0; margin: 0; }
 .draft-list li { padding: 4px 6px; border-radius: 4px; cursor: pointer; }
 .draft-list li:hover { background: var(--bg-hover); }
 .draft-snippet { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.review-actions { display: flex; gap: 8px; }
+.review-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .review-button .count { margin-left: 6px; }
 .review-button.queued, .review-button.needs_attention { border-color: var(--warn); }
 .draft-review-card { cursor: pointer; border-color: var(--draft); }
@@ -400,3 +418,25 @@ code { font-family: var(--mono); font-size: 0.92em; }
 .add-sub input { flex: 1; }
 .empty-inbox { padding: 16px; }
 .empty-inbox button { margin-top: 6px; }
+
+/* Find in the diff. */
+.find-bar { display: flex; align-items: center; gap: 6px; padding: 6px 10px; border-bottom: 1px solid var(--border); background: var(--bg-soft); }
+.find-bar input { width: 260px; }
+.find-count { min-width: 64px; }
+mark.find-hit { background: #fff1a8; color: inherit; border-radius: 2px; }
+mark.find-hit.current { background: #f5a623; }
+@media (prefers-color-scheme: dark) {
+  mark.find-hit { background: rgba(250, 220, 80, 0.35); }
+  mark.find-hit.current { background: rgba(245, 150, 30, 0.8); }
+}
+.viewed-toggle { white-space: nowrap; }
+
+/* Keyboard shortcuts overview. */
+.modal.shortcuts { width: min(860px, calc(100vw - 32px)); max-height: calc(100vh - 64px); overflow: auto; }
+.shortcut-groups { columns: 2 280px; column-gap: 32px; }
+.shortcut-groups section { break-inside: avoid; margin-bottom: 12px; }
+.shortcut-groups dl { margin: 0; }
+.shortcut-groups dl > div { display: flex; gap: 12px; padding: 2px 0; font-size: 13px; }
+.shortcut-groups dt { width: 72px; flex: none; text-align: right; }
+.shortcut-groups dd { margin: 0; }
+kbd { font-family: var(--mono); font-size: 12px; padding: 1px 5px; border: 1px solid var(--border); border-radius: 4px; background: var(--bg-soft); }

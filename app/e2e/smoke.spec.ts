@@ -50,7 +50,9 @@ test("review a synced PR: description, checks, diff, threads, context", async ({
   await expect(page.locator(".generated-note")).toContainText("generated");
   await page.screenshot({ path: "test-results/generated.png" });
   await page.getByRole("button", { name: "Show diff" }).click();
-  await expect(page.locator(".notice.warn")).toContainText("computed locally");
+  const local = page.locator(".local-diff");
+  await expect(local.locator("summary")).toHaveText("Computed locally · line comments are off");
+  await expect(local).not.toHaveAttribute("open");
 });
 
 test("keeps working when GitHub is unreachable", async ({ page, request }) => {

@@ -21,9 +21,12 @@ export function Browse({ selected, onOpen }: { selected: number | null; onOpen: 
   const [prs, setPrs] = useState<BrowsePr[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<ApiError | null>(null);
-  const [adding, setAdding] = useState<string | null>(null);
+  // PRs being added right now (several can be under way).
+  const [adding, setAdding] = useState<ReadonlySet<string>>(new Set());
   // Ignore answers to requests the user has since replaced.
   const generation = useRef(0);
+  // Only the PR clicked last opens when its sync finishes.
+  const lastClicked = useRef<string | null>(null);
 
   const load = async (f: string, cursor: string | null) => {
     const gen = ++generation.current;
@@ -47,17 +50,23 @@ export function Browse({ selected, onOpen }: { selected: number | null; onOpen: 
   }, [filter]);
 
   const open = async (pr: BrowsePr) => {
+    lastClicked.current = pr.nodeId;
     if (pr.localId !== null) return onOpen(pr.localId);
-    setAdding(pr.nodeId);
+    if (adding.has(pr.nodeId)) return;
+    setAdding((a) => new Set(a).add(pr.nodeId));
     setError(null);
     try {
       const id = await api.addPr(pr.url);
       setPrs((all) => all.map((p) => (p.nodeId === pr.nodeId ? { ...p, localId: id, offline: true } : p)));
-      onOpen(id);
+      if (lastClicked.current === pr.nodeId) onOpen(id);
     } catch (e) {
       setError(e as ApiError);
     } finally {
-      setAdding(null);
+      setAdding((a) => {
+        const next = new Set(a);
+        next.delete(pr.nodeId);
+        return next;
+      });
     }
   };
 
@@ -114,7 +123,7 @@ export function Browse({ selected, onOpen }: { selected: number | null; onOpen: 
             <div className="row2 muted small">
               {pr.repo}#{pr.number} · {pr.author ?? "ghost"} · {ago(pr.updatedAt)}
               {pr.isDraft && <span className="badge">draft</span>}
-              {adding === pr.nodeId && <span className="badge">adding…</span>}
+              {adding.has(pr.nodeId) && <span className="badge">adding…</span>}
             </div>
           </li>
         ))}

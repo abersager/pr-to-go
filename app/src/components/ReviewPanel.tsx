@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
-import { api } from "../api";
+import { api, copyText } from "../api";
+import { type CommandId, runCommand, useCommand, withShortcut } from "../commands";
 import type { Draft, DraftStatus, PrDetail, Verdict } from "../types";
 import { ago, until } from "../util/format";
 import { AttentionView } from "./AttentionView";
@@ -24,6 +25,43 @@ const VERDICTS: { value: Verdict; label: string; hint: string }[] = [
   { value: "REQUEST_CHANGES", label: "Request changes", hint: "Feedback that must be addressed" },
 ];
 
+const VERDICT_COMMANDS: [Verdict, CommandId][] = [
+  ["COMMENT", "review.verdictComment"],
+  ["APPROVE", "review.verdictApprove"],
+  ["REQUEST_CHANGES", "review.verdictRequestChanges"],
+];
+
+const SENDING: DraftStatus[] = ["queued", "preflight", "staging", "submitting"];
+
+/** Which review actions make sense right now (for buttons and the menu). */
+export function reviewAvailability(pr: PrDetail | null, draft: Draft | null) {
+  const status: DraftStatus = draft?.status ?? "draft";
+  const editable = status === "draft";
+  const sending = SENDING.includes(status);
+  return {
+    verdict: (v: Verdict) => !!pr && editable && (!pr.viewerDidAuthor || v === "COMMENT"),
+    submit: !!draft && editable,
+    edit: !!draft && sending,
+    retry: !!draft && sending && !!draft.lastError,
+    copy: !!draft && status !== "submitted",
+    discard: !!draft && status !== "submitted" && status !== "discarded",
+  };
+}
+
+/** Review commands and when each is available. */
+export function reviewCommands(pr: PrDetail | null, draft: Draft | null) {
+  const a = reviewAvailability(pr, draft);
+  const verdict = draft?.verdict ?? "COMMENT";
+  return [
+    ...VERDICT_COMMANDS.map(([v, id]) => ({ id, enabled: a.verdict(v), checked: verdict === v })),
+    { id: "review.submit" as CommandId, enabled: a.submit, checked: false },
+    { id: "review.edit" as CommandId, enabled: a.edit, checked: false },
+    { id: "review.retry" as CommandId, enabled: a.retry, checked: false },
+    { id: "review.copy" as CommandId, enabled: a.copy, checked: false },
+    { id: "review.discard" as CommandId, enabled: a.discard, checked: false },
+  ];
+}
+
 /** The first line of prose in a comment, skipping code fences. */
 function snippet(body: string): string {
   const line = body.split("\n").find((l) => l.trim() && !l.trim().startsWith("```"));
@@ -36,18 +74,28 @@ export function ReviewPanel({
   onDraft,
   onClose,
   onOpenFile,
+  command = null,
+  onCommandDone,
 }: {
   pr: PrDetail;
   draft: Draft | null;
   onDraft: (d: Draft | null) => void;
   onClose: () => void;
   onOpenFile: (path: string) => void;
+  /** A menu command to run once the panel is up (it was closed). */
+  command?: CommandId | null;
+  onCommandDone?: () => void;
 }) {
   const [summary, setSummary] = useState(draft?.bodyMd ?? "");
   const [preview, setPreview] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [confirmDiscard, setConfirmDiscard] = useState(false);
+  const confirmRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (confirmDiscard) confirmRef.current?.scrollIntoView({ block: "nearest" });
+  }, [confirmDiscard]);
   const timer = useRef<number | undefined>(undefined);
   const chain = useRef<Promise<void>>(Promise.resolve());
   const status: DraftStatus = draft?.status ?? "draft";
@@ -98,6 +146,42 @@ export function ReviewPanel({
 
   const comments = draft?.comments ?? [];
   const own = pr.viewerDidAuthor;
+  const avail = reviewAvailability(pr, draft);
+
+  const setVerdict = (v: Verdict) => {
+    setPendingVerdict(v);
+    void run(() => api.updateDraftReview(pr.id, { verdict: v })).finally(() => setPendingVerdict(null));
+  };
+  const submit = () =>
+    void run(async () => {
+      await flushSummary();
+      return api.queueReview(pr.id);
+    });
+  const unqueue = () => void run(() => api.unqueueReview(pr.id));
+  const retry = () => void run(async () => api.retryReview(pr.id));
+  const copy = () =>
+    void run(async () => {
+      const md = await api.exportReviewMarkdown(pr.id);
+      await copyText(md);
+      setError(null);
+      setCopied(true);
+    });
+
+  for (const [v, id] of VERDICT_COMMANDS) {
+    // A fixed list, so the hooks are always called in the same order.
+    useCommand(id, () => setVerdict(v), { enabled: avail.verdict(v) && !busy, checked: verdict === v });
+  }
+  useCommand("review.submit", submit, { enabled: avail.submit && !busy });
+  useCommand("review.edit", unqueue, { enabled: avail.edit && !busy });
+  useCommand("review.retry", retry, { enabled: avail.retry && !busy });
+  useCommand("review.copy", copy, { enabled: avail.copy && !busy });
+  useCommand("review.discard", () => setConfirmDiscard(true), { enabled: avail.discard && !busy });
+  useEffect(() => {
+    if (command) {
+      runCommand(command);
+      onCommandDone?.();
+    }
+  }, [command, onCommandDone]);
   // No draft in progress: show the last review that went out.
   const sent = !draft && pr.lastReview ? pr.lastReview : null;
 
@@ -136,7 +220,7 @@ export function ReviewPanel({
               {draft.lastError}
             </span>
           )}{" "}
-          <button className="link" onClick={() => void run(async () => api.retryReview(pr.id))}>
+          <button className="link" onClick={retry}>
             Try now
           </button>
         </p>
@@ -146,7 +230,7 @@ export function ReviewPanel({
           pr={pr}
           draft={draft}
           onDraft={onDraft}
-          onEdit={() => void run(() => api.unqueueReview(pr.id))}
+          onEdit={unqueue}
           onSignInAgain={() => void api.signOut().then(() => window.location.reload())}
         />
       )}
@@ -189,21 +273,26 @@ export function ReviewPanel({
 
       <section>
         <div className="panel-label">Verdict</div>
+        {own && (
+          <p className="small muted own-pr-note">
+            This is your own pull request. GitHub doesn't let authors approve it or request changes, so your review
+            goes out as comments.
+          </p>
+        )}
         {VERDICTS.map((v) => {
           const blocked = own && v.value !== "COMMENT";
           return (
-            <label key={v.value} className={`verdict ${blocked ? "muted" : ""}`} title={blocked ? "Not on your own pull request" : v.hint}>
+            <label
+              key={v.value}
+              className={`verdict ${blocked ? "muted" : ""}`}
+              title={blocked ? "Not available on your own pull request" : v.hint}
+            >
               <input
                 type="radio"
                 name="verdict"
                 checked={verdict === v.value}
                 disabled={!editable || blocked}
-                onChange={() => {
-                  setPendingVerdict(v.value);
-                  void run(() => api.updateDraftReview(pr.id, { verdict: v.value })).finally(() =>
-                    setPendingVerdict(null),
-                  );
-                }}
+                onChange={() => setVerdict(v.value)}
               />
               {v.label}
             </label>
@@ -231,56 +320,58 @@ export function ReviewPanel({
       {error && <p className="error small">{error}</p>}
       <div className="review-actions">
         {status === "draft" && (
-          <button
-            className="primary"
-            disabled={busy}
-            onClick={() =>
-              void run(async () => {
-                await flushSummary();
-                return api.queueReview(pr.id);
-              })
-            }
-          >
+          <button className="primary" disabled={busy} onClick={submit} title={withShortcut("Submit review", "review.submit")}>
             Submit review
           </button>
         )}
-        {["queued", "preflight", "staging", "submitting"].includes(status) && (
-          <button disabled={busy} onClick={() => void run(() => api.unqueueReview(pr.id))}>
+        {avail.edit && (
+          <button disabled={busy} onClick={unqueue}>
             Edit review
           </button>
         )}
-        {draft && status !== "submitted" && (
-          <button
-            disabled={busy}
-            title="Copy the whole review as Markdown"
-            onClick={() =>
-              void run(async () => {
-                const md = await api.exportReviewMarkdown(pr.id);
-                await navigator.clipboard.writeText(md);
-                setError(null);
-                setCopied(true);
-              })
-            }
-          >
+        {avail.copy && (
+          <button disabled={busy} title={withShortcut("Copy the whole review as Markdown", "review.copy")} onClick={copy}>
             {copied ? "Copied" : "Copy as Markdown"}
           </button>
         )}
-        {draft && !["submitted", "discarded"].includes(status) && (
-          <button
-            disabled={busy}
-            onClick={() => {
-              if (window.confirm("Discard this review and all its comments?")) {
-                void run(async () => {
-                  await api.discardReview(pr.id);
-                  return null;
-                });
-              }
-            }}
-          >
-            Discard
+        {avail.discard && !confirmDiscard && (
+          <button disabled={busy} onClick={() => setConfirmDiscard(true)}>
+            Discard…
           </button>
         )}
       </div>
+      {confirmDiscard && draft && (
+        <div
+          ref={confirmRef}
+          className="notice warn confirm-discard"
+          role="alertdialog"
+          aria-label="Discard review"
+          onKeyDown={(e) => e.key === "Escape" && setConfirmDiscard(false)}
+        >
+          <p>
+            Discard this review{comments.length > 0 ? ` and its ${comments.length === 1 ? "comment" : `${comments.length} comments`}` : ""}?
+            This can't be undone.
+          </p>
+          <div className="review-actions">
+            <button
+              className="danger"
+              disabled={busy}
+              onClick={() =>
+                void run(async () => {
+                  await api.discardReview(pr.id);
+                  setConfirmDiscard(false);
+                  return null;
+                })
+              }
+            >
+              Discard review
+            </button>
+            <button disabled={busy} autoFocus onClick={() => setConfirmDiscard(false)}>
+              Keep it
+            </button>
+          </div>
+        </div>
+      )}
       {status === "draft" && (
         <p className="muted small">Submitting works offline too: the review waits in the outbox until you're connected.</p>
       )}
