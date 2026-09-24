@@ -319,10 +319,13 @@ We checked these against GitHub's public GraphQL schema
 (`schema.docs.graphql`, fetched 2026-09-23).
 
 - **One commit per review.** `addPullRequestReview` takes a single
-  `commitOID`. `addPullRequestReviewThread` has no commit field, so its
-  threads attach to the review's commit. **A single review can't anchor some
-  comments to the old head and others to the new head.** "Keep this comment
-  where it was" is therefore a choice for the whole review (§10.4).
+  `commitOID`, and places the threads passed to it on that commit.
+  `addPullRequestReviewThread` has no commit field; tested live, it places
+  its thread on the PR's *current* head, whatever commit the review is for.
+  **A single review can't anchor some comments to the old head and others to
+  the new head.** "Keep this comment where it was" is therefore a choice for
+  the whole review (§10.4), and a review of an older commit must send all its
+  line comments in the call that creates it.
 - **Batching line comments.** `addPullRequestReview(threads: [...])` accepts
   `line`, `side`, `startLine` and `startSide` for each thread. The older
   `comments` argument, which uses positions within the diff, is deprecated.
@@ -344,13 +347,27 @@ We checked these against GitHub's public GraphQL schema
 
   File contents that fit come from GraphQL `object(expression:)`, many per
   query.
-- **Unverified; to be tested against a real test repo early in Phase 2:**
+- **Tested live** on 2026-09-24 against a throwaway repository.
+  `crates/core/tests/live_write.rs` repeats these checks.
   - (a) Does the API accept a `commitOID` that a force-push has removed from
-    the PR?
+    the PR? **Yes.** The threads in the create call land on the old commit's
+    lines, keep that commit, and don't show as outdated. A commit that was
+    never part of the PR is refused (`VALIDATION`: "The commitOID is not part
+    of the pull request").
   - (b) Does it accept line comments on expanded context lines outside the
-    hunks?
-
-  v1 assumes "no" to both, and relaxes those rules if testing shows "yes".
+    hunks? **No.** Only lines inside a hunk take comments. In the create
+    call, one such line refuses the whole call (`UNPROCESSABLE`: "Line could
+    not be resolved").
+  - **`addPullRequestReviewThread` fails silently.** When it can't place a
+    thread (a line outside the hunks, a file that isn't in the diff, a range
+    that runs backwards), it answers `thread: null` without an error. The
+    outbox treats that as a refusal. Before the live test it counted it as
+    sent, so the comment was lost.
+  - A range may span two hunks; our own rule (one hunk) is stricter. Empty
+    bodies are accepted; we refuse them before queueing.
+  - On a pending review, the *thread's* `startLine` is unreliable: it's set
+    for single lines, and for a left-side line it's a right-side number. The
+    *comment's* `startLine` is right, and it's what reconciling matches on.
 
 ---
 
@@ -612,7 +629,7 @@ outbox_log (U)     id, draft_review_id, at, step, outcome, detail_json  -- appen
     we display matches what GitHub accepts comments on.
   - **Context expansion** takes lines from the stored base or head blob,
     using the line numbers between hunks. Expanded rows can't take comments
-    (per assumption 3(b)).
+    (GitHub refuses them, §3 (b)).
   - Side-by-side mode pairs runs of deleted lines with runs of added lines.
     Unified mode uses the same rows.
   - We handle `\ No newline at end of file`, CRLF, renames (`prev_path`) and
@@ -823,10 +840,14 @@ whole review:
   of the old head against the new head for the PR's files), and edit a
   comment in place.
 - **Submit against the commit I reviewed ("keep").** Every comment stays
-  exactly where you wrote it. GitHub marks threads on changed lines as
-  outdated. This is only available if the reviewed commit is still accepted
-  as `commitOID` (assumption 3(a)); otherwise the option is disabled and we
-  explain why.
+  exactly where you wrote it: GitHub accepts the reviewed commit even after a
+  force-push removed it (§3 (a)). A thread added on its own would land on the
+  current head, so a kept review sends all its line comments in the call
+  that creates it, never one at a time. If GitHub refuses that call, the
+  review stops without looking for the comment it refused. File comments
+  and replies follow as usual. If GitHub refuses the commit itself, we
+  explain why; **Edit review** then asks again where the review goes when
+  it's queued.
 - **The verdict.** If your verdict is `APPROVE` or `REQUEST_CHANGES`, you're
   asked explicitly: "Your approval was for `abc1234`. The PR is now at
   `def5678`." Choices: approve the new head / downgrade to comment / review
@@ -1002,7 +1023,7 @@ As of 2026-09-23. Everything in the §13 plan is built, except the items under
 
 **Tests.**
 
-- Rust: 92 tests. They are unit tests plus integration tests against the fake
+- Rust: 95 tests. They are unit tests plus integration tests against the fake
   GitHub: sync, drafts, outbox (the §12 scenarios), remap, inbox, checks,
   auth and browse. The outbox tests include a crash at every step boundary
   and a timeout after commit.
@@ -1010,9 +1031,14 @@ As of 2026-09-23. Everything in the §13 plan is built, except the items under
 - End to end: 14 Playwright tests, running the real UI and core against the
   fake. One of them is a large-PR performance check.
 - All GraphQL documents are validated against GitHub's published schema.
-- One read-only live test syncs public PRs from real GitHub. It's ignored
-  by default, and passed on 2026-09-23. Nothing has been sent to real GitHub
-  yet (see 15.3).
+- Two live tests against real GitHub, ignored by default:
+  - `live.rs` syncs public PRs and changes nothing. It passed on 2026-09-23.
+  - `live_write.rs` opens PRs in a throwaway repository and sends reviews
+    through the outbox: every kind of comment, a crash after each step,
+    force-pushes (remapped, and kept on the old commit), and a comment GitHub
+    can't place. It also checks the API behaviour listed in §3. It passed on
+    2026-09-24 against `abersager/pr-to-go-playground`, in about a minute,
+    and closes the PRs it opens.
 - CI runs all of the above. It also builds unsigned installers for macOS,
   Linux and Windows.
 
@@ -1059,15 +1085,8 @@ As of 2026-09-23. Everything in the §13 plan is built, except the items under
 
 ### 15.3 Still open
 
-- **Nothing has been sent to real GitHub yet.** The outbox protocol is tested
-  only against the fake. The first live run should use a throwaway
-  repository, together with the next item.
-- **The assumptions in §3 are not yet tested live.**
-  - (a) A review on a commit that a force-push removed.
-  - (b) Line comments on expanded context outside the hunks.
-
-  Testing them needs a throwaway repository where we may open a PR and post
-  reviews. Until then, v1 assumes "no" to both, as planned.
+- **The live tests run by hand, not in CI.** `live_write.rs` needs a token
+  that can push to a throwaway repository.
 - **Signed and notarized macOS builds.** These need an Apple Developer ID
   certificate and notarization credentials as CI secrets. CI builds unsigned
   installers today.

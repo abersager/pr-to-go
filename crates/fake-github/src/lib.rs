@@ -235,6 +235,7 @@ async fn graphql(State(w): State<Shared>, headers: HeaderMap, body: Bytes) -> Re
                 gql::GqlError::NotFound(m) => ("NOT_FOUND", m),
                 gql::GqlError::Unprocessable(m) => ("UNPROCESSABLE", m),
                 gql::GqlError::Forbidden(m) => ("FORBIDDEN", m),
+                gql::GqlError::Validation(m) => ("VALIDATION", m),
             };
             json!({ "data": null, "errors": [ { "type": ty, "message": msg } ] })
         }

@@ -10,6 +10,8 @@ pub enum GqlError {
     NotFound(String),
     Unprocessable(String),
     Forbidden(String),
+    /// Input GitHub checks before running a mutation (type `VALIDATION`).
+    Validation(String),
 }
 
 pub type GqlResult = Result<Value, GqlError>;

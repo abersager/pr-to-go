@@ -119,6 +119,9 @@ pub struct Pr {
     pub threads: Vec<Thread>,
     pub issue_comments: Vec<IssueComment>,
     pub requested_reviewers: Vec<String>,
+    /// Heads the PR had before a push. GitHub keeps accepting reviews on
+    /// them, even after a force-push removed them from the PR.
+    pub past_heads: Vec<String>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -166,9 +169,10 @@ pub struct World {
     pub patch_limit: usize,
     /// Blob text longer than this comes back truncated from GraphQL.
     pub blob_text_limit: usize,
-    /// Accept a review on a commit a force-push removed from the PR. What
-    /// GitHub does here is unverified (DESIGN.md §3); the default refuses.
-    pub accept_unreachable_review_commits: bool,
+    /// Refuse a review on a commit a force-push removed from the PR. GitHub
+    /// accepted one in a live test (DESIGN.md §3); this simulates it refusing
+    /// anyway, say once the old commit is garbage-collected.
+    pub refuse_force_pushed_review_commits: bool,
     /// What GraphQL responses report as the remaining rate-limit budget.
     pub graphql_remaining: u64,
     /// Organization logins and their members.
@@ -198,7 +202,7 @@ impl World {
             page_size: None,
             patch_limit: 400_000,
             blob_text_limit: 512 * 1024,
-            accept_unreachable_review_commits: false,
+            refuse_force_pushed_review_commits: false,
             graphql_remaining: 4999,
             org_members: BTreeMap::new(),
             seq: 0,
@@ -345,6 +349,7 @@ impl World {
                 threads: vec![],
                 issue_comments: vec![],
                 requested_reviewers: vec![],
+                past_heads: vec![],
             },
         );
         number
@@ -369,7 +374,7 @@ impl World {
         let r = self.repo(repo);
         r.branches.insert(pr.head_ref.clone(), new_head.into());
         let p = r.prs.get_mut(&number).unwrap();
-        p.head_oid = new_head.into();
+        p.past_heads.push(std::mem::replace(&mut p.head_oid, new_head.into()));
         p.threads = threads;
         p.updated_at = now;
     }

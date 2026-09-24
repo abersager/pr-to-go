@@ -164,7 +164,7 @@ export function AttentionView({
               </p>
               <label className="choice">
                 <input type="radio" name="target" checked={target === "reviewed_commit"} onChange={() => setTarget("reviewed_commit")} />
-                Keep every comment where I wrote it (post on the version I reviewed; GitHub shows changed lines as outdated)
+                Keep every comment where I wrote it (posted on the version I reviewed)
               </label>
               <label className="choice">
                 <input type="radio" name="target" checked={target === "current_head"} onChange={() => setTarget("current_head")} />
@@ -214,8 +214,8 @@ export function AttentionView({
           )}
           {r.kind === "reviewed_commit_unavailable" && (
             <p>
-              GitHub no longer accepts the version you reviewed (it was force-pushed away). Choose Edit review and send to
-              the new version instead.
+              GitHub no longer accepts the version you reviewed. Choose Edit review, then send to the new version when
+              you queue it again.
             </p>
           )}
           {r.kind === "auth" && (

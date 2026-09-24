@@ -271,6 +271,28 @@ fn row(c: &Connection, id: i64) -> Result<Row> {
     )?)
 }
 
+/// Whether the review is for an older commit than the PR's current head.
+/// GitHub places a thread added on its own (`addPullRequestReviewThread`) on
+/// the current head, whatever commit its review is for; only threads in the
+/// create call land on the review's commit (DESIGN.md §3).
+fn review_behind_head(c: &Connection, d: &Row) -> Result<bool> {
+    let current: Option<i64> =
+        c.query_row("SELECT current_revision_id FROM pull_request WHERE id = ?1", [d.pr_id], |r| r.get(0))?;
+    Ok(current.is_some_and(|cur| cur != d.target_revision_id.unwrap_or(d.basis_revision_id)))
+}
+
+/// Why GitHub answered an add with nothing (it gives no error). Shown after
+/// "GitHub refused a comment:".
+fn not_placed(c: &Staged) -> String {
+    if c.is_reply() {
+        "no reason given.".into()
+    } else if c.is_file() {
+        "the file isn't part of the pull request's changes any more.".into()
+    } else {
+        "its lines aren't part of the pull request's changes any more.".into()
+    }
+}
+
 /// Normalizes a comment body for matching drafts against what GitHub stored.
 fn norm(body: &str) -> String {
     body.replace("\r\n", "\n").trim().to_string()
@@ -871,6 +893,14 @@ impl Core {
             self.set_status(id, "submitting", "staged", None)?;
             return Ok(Step::Continue);
         };
+        if !next.is_reply() && !next.is_file() && self.db.read(|c| review_behind_head(c, &d))? {
+            // It would land on the wrong commit's lines.
+            let message =
+                "added on its own, it would land on the new version's lines, not the version you reviewed."
+                    .to_string();
+            return self
+                .needs_attention(id, vec![Reason::CommentRejected { comment: Some(next.id), message }]);
+        }
         self.set_inflight(id, &format!("comment:{}", next.id))?;
         let res: std::result::Result<Value, GhError> = if next.is_reply() {
             self.gh
@@ -913,11 +943,24 @@ impl Core {
                         t["id"].as_str().map(str::to_owned),
                     )
                 };
+                let Some(comment) = comment else {
+                    // GitHub couldn't place it, and says so only by leaving
+                    // the result empty.
+                    self.db.write(|tx| {
+                        tx.execute("UPDATE draft_review SET inflight = NULL WHERE id = ?1", [id])?;
+                        Ok(())
+                    })?;
+                    let message = not_placed(&next);
+                    return self.needs_attention(
+                        id,
+                        vec![Reason::CommentRejected { comment: Some(next.id), message }],
+                    );
+                };
                 let now = self.now();
                 self.db.write(|tx| {
                     tx.execute(
                         "UPDATE draft_comment SET staged_node_id = ?2, staged_thread_node_id = ?3 WHERE id = ?1",
-                        params![next.id, comment.clone().unwrap_or_default(), thread],
+                        params![next.id, comment, thread],
                     )?;
                     tx.execute("UPDATE draft_review SET inflight = NULL, attempts = 0 WHERE id = ?1", [id])?;
                     log(tx, id, &now, "stage-comment", "ok", Some(&next.id.to_string()))
@@ -1028,6 +1071,17 @@ impl Core {
                 }
                 if message.to_lowercase().contains("commit") {
                     return self.needs_attention(id, vec![Reason::ReviewedCommitUnavailable { message }]);
+                }
+                // Threads added one by one would land on the current head, so
+                // a review of an older commit can't be narrowed down.
+                let behind = self.db.read(|c| review_behind_head(c, d))?;
+                if behind && batch.len() > 1 {
+                    let message = format!(
+                        "{message}. GitHub doesn't say which comment, and on the version you reviewed they can't be \
+                         tried one at a time. Choose Edit review to change them or send to the new version."
+                    );
+                    return self
+                        .needs_attention(id, vec![Reason::CommentRejected { comment: None, message }]);
                 }
                 match batch.len() {
                     0 => self.needs_attention(id, vec![Reason::CommentRejected { comment: None, message }]),

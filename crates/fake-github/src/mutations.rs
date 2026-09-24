@@ -74,45 +74,26 @@ struct NewThread<'a> {
     body: &'a str,
 }
 
-fn validate_thread(files: &[FileChange], t: &NewThread) -> Result<(), GqlError> {
-    let Some(f) = files.iter().find(|f| f.path == t.path) else {
-        return Err(GqlError::Unprocessable("Path could not be resolved".into()));
-    };
-    if t.body.trim().is_empty() {
-        return Err(GqlError::Unprocessable("Body can't be blank".into()));
-    }
+/// Whether GitHub can place the thread in `files` (the diff it resolves
+/// against). Measured on real GitHub (DESIGN.md §3): only lines inside a
+/// hunk; a range may span hunks but not run backwards.
+fn placeable(files: &[FileChange], t: &NewThread) -> bool {
+    let Some(f) = files.iter().find(|f| f.path == t.path) else { return false };
     if t.subject == "FILE" {
-        return Ok(());
+        return true;
     }
     let side = t.side.unwrap_or("RIGHT");
-    let Some(line) = t.line else {
-        return Err(GqlError::Unprocessable("A line is required for a LINE thread".into()));
-    };
-    let Some(patch) = f.patch.as_deref() else {
-        return Err(GqlError::Unprocessable("Pull request review thread diff is too large".into()));
-    };
-    let Some(end_hunk) = hunk_of(patch, side, line) else {
-        return Err(GqlError::Unprocessable(
-            "Pull request review thread line must be part of the diff".into(),
-        ));
-    };
-    if let Some(start) = t.start_line {
-        let start_side = t.start_side.unwrap_or(side);
-        match hunk_of(patch, start_side, start) {
-            Some(h) if h == end_hunk => {}
-            Some(_) => {
-                return Err(GqlError::Unprocessable(
-                    "Pull request review thread start line must be in the same hunk as the line".into(),
-                ));
-            }
-            None => {
-                return Err(GqlError::Unprocessable(
-                    "Pull request review thread start line must be part of the diff".into(),
-                ));
-            }
+    let (Some(line), Some(patch)) = (t.line, f.patch.as_deref()) else { return false };
+    if hunk_of(patch, side, line).is_none() {
+        return false;
+    }
+    match t.start_line {
+        None => true,
+        Some(start) => {
+            let start_side = t.start_side.unwrap_or(side);
+            hunk_of(patch, start_side, start).is_some() && (start_side != side || start <= line)
         }
     }
-    Ok(())
 }
 
 fn find_pr_mut<'a>(w: &'a mut World, pr_id: &str) -> Result<(String, &'a mut Pr), GqlError> {
@@ -190,12 +171,12 @@ fn add_review(w: &mut World, viewer: &str, vars: &Value) -> GqlResult {
         return Err(GqlError::Unprocessable("User can only have one pending review per pull request".into()));
     }
     let r = &w.repos[&repo];
-    let in_pr = commit == pr_snapshot.head_oid
-        || r.pr_commits(&r.branches[&pr_snapshot.base_ref], &pr_snapshot.head_oid)
-            .iter()
-            .any(|c| c.oid == commit);
-    if !in_pr && !(w.accept_unreachable_review_commits && r.commits.contains_key(&commit)) {
-        return Err(GqlError::Unprocessable("The commit is not part of the pull request".into()));
+    let base_tip = &r.branches[&pr_snapshot.base_ref];
+    let reaches = |head: &str| commit == head || r.pr_commits(base_tip, head).iter().any(|c| c.oid == commit);
+    let in_pr = reaches(&pr_snapshot.head_oid)
+        || (!w.refuse_force_pushed_review_commits && pr_snapshot.past_heads.iter().any(|h| reaches(h)));
+    if !in_pr {
+        return Err(GqlError::Validation("The commitOID is not part of the pull request".into()));
     }
     let files = diff_at(w, &repo, &pr_snapshot, &commit);
     let threads: Vec<Value> = vars.get("threads").and_then(|t| t.as_array()).cloned().unwrap_or_default();
@@ -211,8 +192,14 @@ fn add_review(w: &mut World, viewer: &str, vars: &Value) -> GqlResult {
             body: s(t, "body"),
         })
         .collect();
+    // Threads in the create call are placed on the review's own commit.
     for t in &parsed {
-        validate_thread(&files, t)?;
+        if t.body.trim().is_empty() {
+            return Err(GqlError::Unprocessable("Body can't be blank".into()));
+        }
+        if !placeable(&files, t) {
+            return Err(GqlError::Unprocessable("Line could not be resolved".into()));
+        }
     }
     let review_id = w.next_id("PRR");
     let now = w.tick();
@@ -253,13 +240,14 @@ fn pending_review<'a>(
     Ok((repo, number, rv))
 }
 
+/// Adds one thread to a pending review. Unlike threads in the create call,
+/// GitHub places it on the PR's *current* head, whatever commit the review
+/// is on, and answers `thread: null` (no error) if it can't place it.
 fn add_thread(w: &mut World, viewer: &str, vars: &Value) -> GqlResult {
     let review_id = s(vars, "reviewId");
-    let (repo, number, rv) = pending_review(w, viewer, review_id)?;
-    let commit = rv.commit_oid.clone();
+    let (repo, number, _) = pending_review(w, viewer, review_id)?;
     check_writable(w, &repo)?;
     let pr = w.repos[&repo].prs[&number].clone();
-    let files = diff_at(w, &repo, &pr, &commit);
     let t = NewThread {
         path: s(vars, "path"),
         subject: opt_str(vars, "subjectType").unwrap_or("LINE"),
@@ -269,8 +257,17 @@ fn add_thread(w: &mut World, viewer: &str, vars: &Value) -> GqlResult {
         start_line: opt_u32(vars, "startLine"),
         body: s(vars, "body"),
     };
-    validate_thread(&files, &t)?;
-    let (tid, cid) = new_thread(w, &repo, number, review_id, &commit, &t, viewer);
+    if t.subject == "LINE" && t.line.is_none() {
+        return Err(GqlError::Validation("Line required for for line-level threads".into()));
+    }
+    if t.body.trim().is_empty() {
+        return Err(GqlError::Unprocessable("Body can't be blank".into()));
+    }
+    let files = diff_at(w, &repo, &pr, &pr.head_oid);
+    if !placeable(&files, &t) {
+        return Ok(json!({ "addPullRequestReviewThread": { "thread": null } }));
+    }
+    let (tid, cid) = new_thread(w, &repo, number, review_id, &pr.head_oid, &t, viewer);
     Ok(
         json!({ "addPullRequestReviewThread": { "thread": { "id": tid, "comments": { "nodes": [ { "id": cid } ] } } } }),
     )

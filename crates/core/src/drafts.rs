@@ -667,9 +667,11 @@ impl Core {
             let id = active_draft_id(tx, pr_id)?.ok_or_else(|| Error::Invalid("There's no draft review.".into()))?;
             self.check_can_take_back(tx, id, "edited")?;
             crate::outbox::release_pending_review(tx, id)?;
+            // Where it goes is asked again when it's queued again, so a
+            // review kept on a version GitHub refuses can go to the new one.
             tx.execute(
-                "UPDATE draft_review SET status = 'draft', queued_at = NULL, next_attempt_at = NULL, updated_at = ?2
-                 WHERE id = ?1",
+                "UPDATE draft_review SET status = 'draft', queued_at = NULL, next_attempt_at = NULL, updated_at = ?2,
+                   target_mode = 'current_head' WHERE id = ?1",
                 params![id, now],
             )?;
             crate::outbox::log(tx, id, &now, "unqueue", "ok", None)?;

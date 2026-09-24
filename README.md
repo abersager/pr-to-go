@@ -5,8 +5,8 @@ review them with a full diff viewer on the plane or train, and your comments
 and verdicts wait in an outbox until you're back online.
 
 > **Status:** pre-release. Everything below works against the fake GitHub in
-> our tests. Against real GitHub, syncing is verified with public PRs, but no
-> review has been sent yet. There are no signed builds. See [docs/DESIGN.md](docs/DESIGN.md) for the design, and
+> our tests. Against real GitHub, syncing is verified with public PRs, and
+> sending reviews with a throwaway repository. There are no signed builds. See [docs/DESIGN.md](docs/DESIGN.md) for the design, and
 > [§15](docs/DESIGN.md#15-implementation-status) for what's built and what's
 > still open.
 
@@ -54,6 +54,17 @@ pnpm test                  # UI unit tests
 pnpm e2e                   # UI + core + fake GitHub in Chromium (Playwright)
 pnpm validate:graphql      # check our GraphQL queries against GitHub's schema
 pnpm tauri build           # package the app (unsigned for now)
+```
+
+Two tests talk to real GitHub and are skipped unless asked for. `live` syncs
+public PRs and changes nothing. `live_write` opens pull requests in a
+repository you name, sends reviews on them, and closes them again (about a
+minute), so point it at a throwaway repository you can push to:
+
+```sh
+GITHUB_TOKEN=$(gh auth token) cargo test -p pr-to-go-core --test live -- --ignored
+GITHUB_TOKEN=$(gh auth token) LIVE_WRITE_REPO=you/throwaway \
+  cargo test -p pr-to-go-core --test live_write -- --ignored
 ```
 
 Logs are written to the platform's log folder

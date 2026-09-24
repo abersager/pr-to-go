@@ -330,7 +330,71 @@ async fn keep_as_written_fails_clearly_if_github_refuses_the_old_commit() {
     let (h, pr, rev, s) = setup().await;
     h.core.add_draft_comment(pr, line(rev, "src/lib.rs", Side::Right, 5, "x")).unwrap();
     h.core.queue_review(pr).unwrap();
-    // A force-push that drops the reviewed commit from the PR entirely.
+    // A force-push drops the reviewed commit from the PR, and GitHub has
+    // forgotten it (it accepts one normally).
+    h.fake.with(|w| {
+        let c = w.commit(REPO, Some(&s.base), &[("src/lib.rs", Some("all new\n"))], "Rewrite");
+        w.push(REPO, s.number, &c);
+        w.refuse_force_pushed_review_commits = true;
+    });
+    assert_eq!(drain(&h, pr).await, "needs_attention");
+    h.core
+        .resolve_review(pr, Resolution { target_mode: Some("reviewed_commit".into()), ..Default::default() })
+        .unwrap();
+    assert_eq!(drain(&h, pr).await, "needs_attention");
+    assert!(matches!(attention_reasons(&h, pr)[0], Reason::ReviewedCommitUnavailable { .. }));
+    assert!(on_github(&h, s.number).0.is_empty());
+
+    // Edit review, queue again: asked again, and it can go to the new head.
+    h.core.unqueue_review(pr).unwrap();
+    h.core.queue_review(pr).unwrap();
+    assert_eq!(drain(&h, pr).await, "needs_attention");
+    assert!(matches!(attention_reasons(&h, pr)[0], Reason::HeadMoved { .. }));
+    let id = h.core.draft(pr).unwrap().unwrap().comments[0].id;
+    let to_file = CommentResolution {
+        id,
+        action: "to_file".into(),
+        side: None,
+        line: None,
+        start_side: None,
+        start_line: None,
+        path: None,
+    };
+    h.core.resolve_review(pr, Resolution { comments: vec![to_file], ..Default::default() }).unwrap();
+    assert_eq!(drain(&h, pr).await, "submitted");
+    let head = h.fake.with(|w| w.pr(REPO, s.number).head_oid.clone());
+    assert_eq!(on_github(&h, s.number).0[0].2, head);
+}
+
+/// Moves a draft comment to a line GitHub can't place, past the checks the
+/// app does when a comment is written.
+fn move_unchecked(h: &Harness, comment: i64, line: u32) {
+    h.core
+        .db()
+        .write(|tx| Ok(tx.execute("UPDATE draft_comment SET line = ?2 WHERE id = ?1", (comment, line))?))
+        .unwrap();
+}
+
+fn drop_comment(id: i64) -> CommentResolution {
+    CommentResolution {
+        id,
+        action: "drop".into(),
+        side: None,
+        line: None,
+        start_side: None,
+        start_line: None,
+        path: None,
+    }
+}
+
+#[tokio::test]
+async fn keep_as_written_survives_a_force_push() {
+    let (h, pr, rev, s) = setup().await;
+    h.core.add_draft_comment(pr, line(rev, "src/lib.rs", Side::Right, 5, "Keep me where I was")).unwrap();
+    h.core.add_draft_comment(pr, file(rev, "src/lib.rs", "About the whole file")).unwrap();
+    let gone = h.core.add_draft_comment(pr, file(rev, "src/new.rs", "Needs tests")).unwrap().comments[2].id;
+    h.core.queue_review(pr).unwrap();
+    // A force-push that drops the reviewed commit, and src/new.rs with it.
     h.fake.with(|w| {
         let c = w.commit(REPO, Some(&s.base), &[("src/lib.rs", Some("all new\n"))], "Rewrite");
         w.push(REPO, s.number, &c);
@@ -339,8 +403,72 @@ async fn keep_as_written_fails_clearly_if_github_refuses_the_old_commit() {
     h.core
         .resolve_review(pr, Resolution { target_mode: Some("reviewed_commit".into()), ..Default::default() })
         .unwrap();
+    // File comments are added one by one, and GitHub places those on the
+    // current head, where src/new.rs isn't part of the PR any more. It says
+    // so only by returning no thread: that must not count as sent.
     assert_eq!(drain(&h, pr).await, "needs_attention");
-    assert!(matches!(attention_reasons(&h, pr)[0], Reason::ReviewedCommitUnavailable { .. }));
+    let reasons = attention_reasons(&h, pr);
+    assert!(
+        matches!(&reasons[0], Reason::CommentRejected { comment: Some(c), message } if *c == gone && message.contains("file")),
+        "{reasons:?}"
+    );
+    h.core
+        .resolve_review(pr, Resolution { comments: vec![drop_comment(gone)], ..Default::default() })
+        .unwrap();
+    assert_eq!(drain(&h, pr).await, "submitted");
+    let (reviews, comments) = on_github(&h, s.number);
+    assert_eq!(reviews.len(), 1);
+    assert_eq!(reviews[0].2, s.head, "posted on the commit that was reviewed");
+    let c = comments.iter().find(|c| c.body == "Keep me where I was").unwrap();
+    assert_eq!(c.line, Some(5));
+    assert!(comments.iter().any(|c| c.body == "About the whole file" && c.subject == "FILE"));
+}
+
+#[tokio::test]
+async fn a_line_github_cant_place_is_flagged_not_dropped() {
+    let (h, pr, rev, s) = setup().await;
+    h.core.add_draft_comment(pr, line(rev, "src/lib.rs", Side::Right, 5, "fine 1")).unwrap();
+    let d = h.core.add_draft_comment(pr, line(rev, "src/lib.rs", Side::Right, 6, "unplaceable")).unwrap();
+    let bad = d.comments[1].id;
+    h.core.add_draft_comment(pr, line(rev, "src/lib.rs", Side::Right, 21, "fine 2")).unwrap();
+    move_unchecked(&h, bad, 13);
+    h.core.queue_review(pr).unwrap();
+    // GitHub refuses the batch, so the threads go one by one; the bad one
+    // comes back as `thread: null`.
+    assert_eq!(drain(&h, pr).await, "needs_attention");
+    assert!(
+        matches!(&attention_reasons(&h, pr)[0], Reason::CommentRejected { comment: Some(c), .. } if *c == bad)
+    );
+    h.core
+        .resolve_review(pr, Resolution { comments: vec![drop_comment(bad)], ..Default::default() })
+        .unwrap();
+    assert_eq!(drain(&h, pr).await, "submitted");
+    let (_, comments) = on_github(&h, s.number);
+    let mut bodies: Vec<&str> = comments.iter().map(|c| c.body.as_str()).collect();
+    bodies.sort();
+    assert_eq!(bodies, ["fine 1", "fine 2"]);
+}
+
+#[tokio::test]
+async fn a_refused_batch_on_an_older_commit_isnt_split() {
+    let (h, pr, rev, s) = setup().await;
+    h.core.add_draft_comment(pr, line(rev, "src/lib.rs", Side::Right, 5, "one")).unwrap();
+    let d = h.core.add_draft_comment(pr, line(rev, "src/lib.rs", Side::Right, 6, "two")).unwrap();
+    move_unchecked(&h, d.comments[1].id, 13);
+    h.core.queue_review(pr).unwrap();
+    h.fake.with(|w| {
+        let c = w.commit(REPO, Some(&s.head), &[("src/lib.rs", Some("all new\n"))], "Rewrite");
+        w.push(REPO, s.number, &c);
+    });
+    assert_eq!(drain(&h, pr).await, "needs_attention");
+    h.core
+        .resolve_review(pr, Resolution { target_mode: Some("reviewed_commit".into()), ..Default::default() })
+        .unwrap();
+    h.fake.clear_log();
+    assert_eq!(drain(&h, pr).await, "needs_attention");
+    // Adding the threads one by one would put them on the new head's lines.
+    assert!(!h.fake.log().iter().any(|op| op == "AddThread"), "{:?}", h.fake.log());
+    assert!(matches!(&attention_reasons(&h, pr)[0], Reason::CommentRejected { comment: None, .. }));
     assert!(on_github(&h, s.number).0.is_empty());
 }
 
