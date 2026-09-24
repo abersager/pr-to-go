@@ -132,6 +132,8 @@ pub struct Repo {
     pub branches: BTreeMap<String, String>,
     pub prs: BTreeMap<u64, Pr>,
     pub checks: HashMap<String, Vec<Check>>,
+    /// Users added to this repository as collaborators.
+    pub collaborators: Vec<String>,
 }
 
 /// One changed file in a PR diff.
@@ -169,6 +171,8 @@ pub struct World {
     pub accept_unreachable_review_commits: bool,
     /// What GraphQL responses report as the remaining rate-limit budget.
     pub graphql_remaining: u64,
+    /// Organization logins and their members.
+    pub org_members: BTreeMap<String, Vec<String>>,
     seq: u64,
 }
 
@@ -196,6 +200,7 @@ impl World {
             blob_text_limit: 512 * 1024,
             accept_unreachable_review_commits: false,
             graphql_remaining: 4999,
+            org_members: BTreeMap::new(),
             seq: 0,
         };
         for u in [VIEWER, "alice", "bob"] {
@@ -216,6 +221,14 @@ impl World {
         self.seq += 1;
         let t = UNIX_EPOCH + Duration::from_secs(1_780_000_000 + self.seq * 60);
         humantime::format_rfc3339_seconds(t).to_string()
+    }
+
+    pub fn join_org(&mut self, org: &str, user: &str) {
+        self.org_members.entry(org.into()).or_default().push(user.into());
+    }
+
+    pub fn add_collaborator(&mut self, repo: &str, user: &str) {
+        self.repo(repo).collaborators.push(user.into());
     }
 
     pub fn add_user(&mut self, login: &str) {

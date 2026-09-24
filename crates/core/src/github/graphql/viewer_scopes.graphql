@@ -1,0 +1,26 @@
+# Where the open pull requests the viewer can see live: their own
+# repositories, their organizations, and repositories they collaborate on.
+query ViewerScopes {
+  viewer {
+    login
+    organizations(first: 100) {
+      nodes {
+        login
+      }
+    }
+    repositories(
+      first: 100
+      affiliations: [COLLABORATOR]
+      isArchived: false
+      orderBy: { field: PUSHED_AT, direction: DESC }
+    ) {
+      totalCount
+      nodes {
+        nameWithOwner
+        owner {
+          login
+        }
+      }
+    }
+  }
+}

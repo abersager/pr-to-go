@@ -3,6 +3,7 @@
 
 pub mod auth;
 pub mod blobstore;
+pub mod browse;
 pub mod checks;
 pub mod clock;
 pub mod commands;

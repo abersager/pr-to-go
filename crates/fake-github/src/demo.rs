@@ -365,6 +365,27 @@ pub fn build(w: &mut World) -> Demo {
     );
     w.set_checks(REPO, &fx, &[("test", "COMPLETED", Some("SUCCESS"))]);
 
+    // The viewer belongs to acme, and bob shared a repository with them: its
+    // PR isn't synced, so there's something to find under Browse.
+    w.join_org("acme", VIEWER);
+    let dotfiles = "bob/dotfiles";
+    w.create_repo(dotfiles);
+    let zshrc = "export EDITOR=vim\nPROMPT='%~ %# '\n";
+    let base = w.commit(dotfiles, None, &[(".zshrc", Some(zshrc))], "Initial commit");
+    w.set_branch(dotfiles, "main", &base);
+    let prompt = "export EDITOR=vim\nPROMPT='%F{blue}%~%f %# '\nsetopt HIST_IGNORE_DUPS\n";
+    let tidy = w.commit(dotfiles, Some(&base), &[(".zshrc", Some(prompt))], "Colour the prompt");
+    w.open_pr(
+        dotfiles,
+        "main",
+        "prompt",
+        &tidy,
+        "Colour the zsh prompt",
+        "Easier to spot in a busy terminal.",
+        "bob",
+    );
+    w.add_collaborator(dotfiles, VIEWER);
+
     Demo { retry_pr, dark_mode_pr, fixtures_pr }
 }
 

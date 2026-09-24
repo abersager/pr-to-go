@@ -26,6 +26,7 @@ pub fn handle(w: &mut World, viewer: &str, op: &str, vars: &Value) -> GqlResult 
         "PrIssueComments" => pr_issue_comments(w, vars),
         "Blobs" => blobs(w, vars),
         "SearchPrs" => search_prs(w, viewer, vars),
+        "ViewerScopes" => viewer_scopes(w, viewer),
         "RepoPrs" => repo_prs(w, vars),
         _ => crate::mutations::handle(w, viewer, op, vars),
     }
@@ -415,13 +416,48 @@ fn index_pr(r: &Repo, pr: &Pr) -> Value {
     })
 }
 
-/// The qualifiers PR to Go's searches use: is:pr/open/closed/merged,
-/// author:, review-requested:, assignee: (never matches), repo:.
+fn viewer_scopes(w: &World, viewer: &str) -> GqlResult {
+    let orgs: Vec<Value> = w
+        .org_members
+        .iter()
+        .filter(|(_, members)| members.iter().any(|m| m == viewer))
+        .map(|(org, _)| json!({ "login": org }))
+        .collect();
+    let collab: Vec<Value> = w
+        .repos
+        .values()
+        .filter(|r| !r.archived && r.collaborators.iter().any(|c| c == viewer))
+        .map(|r| json!({ "nameWithOwner": r.full_name(), "owner": { "login": r.owner } }))
+        .collect();
+    Ok(json!({ "viewer": {
+        "login": viewer,
+        "organizations": { "nodes": orgs },
+        "repositories": { "totalCount": collab.len(), "nodes": collab },
+    }}))
+}
+
+/// The search syntax PR to Go uses: is:pr/open/closed/merged, author:,
+/// review-requested:, assignee: (never matches), archived:, sort: (ignored),
+/// and words, which must appear in the title. As on GitHub, the scope
+/// qualifiers user:, org: and repo: match if any of them does.
 fn search_prs(w: &mut World, viewer: &str, vars: &Value) -> GqlResult {
     let q = s(vars, "q");
     let me = |v: &str| if v == "@me" { viewer.to_string() } else { v.to_string() };
+    let scopes: Vec<(&str, &str)> = q
+        .split_whitespace()
+        .filter_map(|t| t.split_once(':'))
+        .filter(|(k, _)| matches!(*k, "user" | "org" | "repo"))
+        .collect();
     let mut hits: Vec<(&Repo, &Pr)> = Vec::new();
     for r in w.repos.values() {
+        let in_scope = scopes.is_empty()
+            || scopes.iter().any(|(k, v)| match *k {
+                "repo" => r.full_name() == *v,
+                _ => r.owner == *v,
+            });
+        if !in_scope {
+            continue;
+        }
         for pr in r.prs.values() {
             let ok = q.split_whitespace().all(|t| match t.split_once(':') {
                 Some(("is", "pr")) => true,
@@ -431,8 +467,9 @@ fn search_prs(w: &mut World, viewer: &str, vars: &Value) -> GqlResult {
                 Some(("author", a)) => pr.author == me(a),
                 Some(("review-requested", a)) => pr.requested_reviewers.contains(&me(a)),
                 Some(("assignee", _)) => false,
-                Some(("repo", full)) => r.full_name() == full,
-                _ => true,
+                Some(("archived", "false")) => !r.archived,
+                Some(_) => true,
+                None => pr.title.to_lowercase().contains(&t.to_lowercase()),
             });
             if ok {
                 hits.push((r, pr));

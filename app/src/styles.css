@@ -129,6 +129,9 @@ code { font-family: var(--mono); font-size: 0.92em; }
 .add-pr input { flex: 1; min-width: 0; }
 .add-pr .error { width: 100%; margin: 0; }
 .empty-list { padding: 16px; }
+.sidebar-tabs.segmented { display: flex; padding: 10px 10px 0; }
+.sidebar-tabs button { flex: 1; }
+.browse-scope { margin: 0; padding: 6px 12px; border-bottom: 1px solid var(--border); }
 .inbox ul { list-style: none; margin: 0; padding: 0; }
 .inbox li { padding: 8px 12px; border-bottom: 1px solid var(--border); cursor: pointer; }
 .inbox li:hover { background: var(--bg-hover); }

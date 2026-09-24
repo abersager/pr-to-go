@@ -16,7 +16,7 @@ use crate::github::{GhError, OpKind};
 use crate::service::{Core, Event};
 use crate::sync::PrRef;
 
-const SEARCH_PRS: &str = include_str!("github/graphql/search_prs.graphql");
+pub(crate) const SEARCH_PRS: &str = include_str!("github/graphql/search_prs.graphql");
 const REPO_PRS: &str = include_str!("github/graphql/repo_prs.graphql");
 
 /// GitHub's search returns at most this many results.
@@ -50,30 +50,30 @@ pub const PRESETS: &[(&str, &str)] = &[
 
 #[derive(Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
-struct IndexPr {
-    id: String,
-    number: i64,
-    title: String,
-    url: String,
-    state: String,
-    is_draft: bool,
-    created_at: String,
-    updated_at: String,
-    head_ref_oid: String,
-    base_ref_name: String,
-    head_ref_name: String,
-    author: Option<crate::github::queries::Login>,
-    repository: IndexRepo,
+pub(crate) struct IndexPr {
+    pub id: String,
+    pub number: i64,
+    pub title: String,
+    pub url: String,
+    pub state: String,
+    pub is_draft: bool,
+    pub created_at: String,
+    pub updated_at: String,
+    pub head_ref_oid: String,
+    pub base_ref_name: String,
+    pub head_ref_name: String,
+    pub author: Option<crate::github::queries::Login>,
+    pub repository: IndexRepo,
 }
 
 #[derive(Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
-struct IndexRepo {
-    id: String,
-    name: String,
-    owner: crate::github::queries::Login,
-    is_private: bool,
-    is_archived: bool,
+pub(crate) struct IndexRepo {
+    pub id: String,
+    pub name: String,
+    pub owner: crate::github::queries::Login,
+    pub is_private: bool,
+    pub is_archived: bool,
 }
 
 #[derive(Serialize, Clone, Debug, Default)]

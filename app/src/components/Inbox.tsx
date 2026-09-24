@@ -1,6 +1,7 @@
 import { useState } from "react";
 import type { OutboxItem, PrSummary, Readiness } from "../types";
 import { ago, bytes, until } from "../util/format";
+import { Browse } from "./Browse";
 
 export function SyncBadge({ pr }: { pr: PrSummary }) {
   const map: Record<string, [string, string]> = {
@@ -70,6 +71,7 @@ export function Inbox({
   onSyncAll,
   onSettings,
   onFollowReviewRequests,
+  onBrowseOpen,
 }: {
   prs: PrSummary[];
   selected: number | null;
@@ -85,79 +87,106 @@ export function Inbox({
   onSyncAll: () => void;
   onSettings: () => void;
   onFollowReviewRequests: () => void;
+  /** A PR picked under Browse (already added and synced). */
+  onBrowseOpen: (id: number) => void;
 }) {
+  const [mode, setMode] = useState<"inbox" | "browse">("inbox");
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   return (
     <aside className="inbox">
-      <form
-        className="add-pr"
-        onSubmit={async (e) => {
-          e.preventDefault();
-          setBusy(true);
-          setError(null);
-          try {
-            await onAdd(input);
-            setInput("");
-          } catch (err) {
-            setError((err as Error).message);
-          } finally {
-            setBusy(false);
-          }
-        }}
-      >
-        <input
-          placeholder="Add a PR: URL or owner/repo#123"
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          disabled={busy}
-        />
-        <button type="submit" disabled={busy || !input.trim()}>
-          {busy ? "Syncing…" : "Add"}
+      <div className="sidebar-tabs segmented" role="tablist">
+        <button
+          role="tab"
+          aria-selected={mode === "inbox"}
+          className={mode === "inbox" ? "on" : ""}
+          onClick={() => setMode("inbox")}
+        >
+          Inbox
         </button>
-        {error && <p className="error small">{error}</p>}
-      </form>
-      <div className="inbox-head">
-        <button onClick={onSyncAll} disabled={syncing} title="Sync everything you follow, for offline review">
-          {syncing ? (progress && progress.total > 0 ? `Syncing ${progress.done}/${progress.total}…` : "Checking…") : "Sync all"}
-        </button>
-        {readiness && readiness.total > 0 && (
-          <span className="readiness" title={`${readiness.partial} partly available, ${readiness.notSynced} not synced yet`}>
-            {readiness.ready + readiness.partial}/{readiness.total} offline · {bytes(readiness.bytes)}
-          </span>
-        )}
-        <span className="spacer" />
-        <button className="icon-button" onClick={onSettings} title="What to sync">
-          ⚙
+        <button
+          role="tab"
+          aria-selected={mode === "browse"}
+          className={mode === "browse" ? "on" : ""}
+          onClick={() => setMode("browse")}
+        >
+          Browse
         </button>
       </div>
-      {syncError && <p className="error small pad">{syncError}</p>}
-      <Outbox items={outbox} onOpen={onOpenReview} />
-      {prs.length === 0 && !hasSubscriptions && (
-        <div className="empty-inbox muted small">
-          <p>Follow the pull requests you review, and they'll be ready whenever you're offline.</p>
-          <button onClick={onFollowReviewRequests}>+ Review requested from me</button>{" "}
-          <button onClick={onSettings}>More options…</button>
-        </div>
+      {mode === "browse" ? (
+        <Browse selected={selected} onOpen={onBrowseOpen} />
+      ) : (
+        <>
+          <form
+            className="add-pr"
+            onSubmit={async (e) => {
+              e.preventDefault();
+              setBusy(true);
+              setError(null);
+              try {
+                await onAdd(input);
+                setInput("");
+              } catch (err) {
+                setError((err as Error).message);
+              } finally {
+                setBusy(false);
+              }
+            }}
+          >
+            <input
+              placeholder="Add a PR: URL or owner/repo#123"
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              disabled={busy}
+            />
+            <button type="submit" disabled={busy || !input.trim()}>
+              {busy ? "Syncing…" : "Add"}
+            </button>
+            {error && <p className="error small">{error}</p>}
+          </form>
+          <div className="inbox-head">
+            <button onClick={onSyncAll} disabled={syncing} title="Sync everything you follow, for offline review">
+              {syncing ? (progress && progress.total > 0 ? `Syncing ${progress.done}/${progress.total}…` : "Checking…") : "Sync all"}
+            </button>
+            {readiness && readiness.total > 0 && (
+              <span className="readiness" title={`${readiness.partial} partly available, ${readiness.notSynced} not synced yet`}>
+                {readiness.ready + readiness.partial}/{readiness.total} offline · {bytes(readiness.bytes)}
+              </span>
+            )}
+            <span className="spacer" />
+            <button className="icon-button" onClick={onSettings} title="What to sync">
+              ⚙
+            </button>
+          </div>
+          {syncError && <p className="error small pad">{syncError}</p>}
+          <Outbox items={outbox} onOpen={onOpenReview} />
+          {prs.length === 0 && !hasSubscriptions && (
+            <div className="empty-inbox muted small">
+              <p>Follow the pull requests you review, and they'll be ready whenever you're offline.</p>
+              <button onClick={onFollowReviewRequests}>+ Review requested from me</button>{" "}
+              <button onClick={onSettings}>More options…</button>
+            </div>
+          )}
+          {prs.length === 0 && hasSubscriptions && <p className="muted empty-list">Nothing in your inbox right now.</p>}
+          <ul>
+            {prs.map((pr) => (
+              <li key={pr.id} className={pr.id === selected ? "selected" : ""} onClick={() => onSelect(pr.id)}>
+                <div className="row1">
+                  <SyncBadge pr={pr} />
+                  <span className="title">{pr.title}</span>
+                  {pr.updatedSinceViewed && <span className="dot-new" title="Updated since you last looked" />}
+                </div>
+                <div className="row2 muted small">
+                  {pr.repo}#{pr.number} · {pr.author ?? "ghost"} · {ago(pr.updatedAt)}
+                  {pr.state !== "OPEN" && <span className={`state ${pr.state.toLowerCase()}`}>{pr.state.toLowerCase()}</span>}
+                  {pr.draftStatus && <span className="badge">{pr.draftStatus === "draft" ? "draft review" : pr.draftStatus.replace("_", " ")}</span>}
+                </div>
+              </li>
+            ))}
+          </ul>
+        </>
       )}
-      {prs.length === 0 && hasSubscriptions && <p className="muted empty-list">Nothing in your inbox right now.</p>}
-      <ul>
-        {prs.map((pr) => (
-          <li key={pr.id} className={pr.id === selected ? "selected" : ""} onClick={() => onSelect(pr.id)}>
-            <div className="row1">
-              <SyncBadge pr={pr} />
-              <span className="title">{pr.title}</span>
-              {pr.updatedSinceViewed && <span className="dot-new" title="Updated since you last looked" />}
-            </div>
-            <div className="row2 muted small">
-              {pr.repo}#{pr.number} · {pr.author ?? "ghost"} · {ago(pr.updatedAt)}
-              {pr.state !== "OPEN" && <span className={`state ${pr.state.toLowerCase()}`}>{pr.state.toLowerCase()}</span>}
-              {pr.draftStatus && <span className="badge">{pr.draftStatus === "draft" ? "draft review" : pr.draftStatus.replace("_", " ")}</span>}
-            </div>
-          </li>
-        ))}
-      </ul>
     </aside>
   );
 }

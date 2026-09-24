@@ -17,6 +17,16 @@ async fn syncs_real_pull_requests() {
     let core = Core::open(CoreOptions::new(dir.path().to_owned(), secrets)).unwrap();
     let status = core.sign_in(&token, "pat").await.unwrap();
     println!("signed in as {:?} scopes {:?}", status.login, status.scopes);
+    // Browse: counts only, so nothing private ends up in the output.
+    let page = core.browse_prs(None, None).await.unwrap();
+    println!(
+        "browse: {} open, {} on the first page, {} orgs, {} shared repos, more: {}",
+        page.total,
+        page.prs.len(),
+        page.scope.orgs.len(),
+        page.scope.shared_repos,
+        page.cursor.is_some()
+    );
     for pr in prs.split_whitespace() {
         let id = core.add_pr(pr).await.unwrap_or_else(|e| panic!("{pr}: {e}"));
         let d = core.get_pr(id).unwrap();

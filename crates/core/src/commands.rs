@@ -229,6 +229,15 @@ impl Core {
             "sync_inbox" => out(self.sync_inbox().await?),
             "readiness" => out(self.readiness()?),
             "gc" => out(self.gc()?),
+            "browse_prs" => {
+                #[derive(serde::Deserialize)]
+                struct A {
+                    filter: Option<String>,
+                    cursor: Option<String>,
+                }
+                let a: A = args(a)?;
+                out(self.browse_prs(a.filter.as_deref(), a.cursor.as_deref()).await?)
+            }
             "generated_patterns" => out(self.generated_patterns()?),
             "set_generated_patterns" => {
                 #[derive(serde::Deserialize)]

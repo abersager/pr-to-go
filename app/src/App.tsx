@@ -129,6 +129,11 @@ export function App() {
           setSelected(id);
           prs.reload();
         }}
+        onBrowseOpen={(id) => {
+          setSelected(id);
+          prs.reload();
+          readiness.reload();
+        }}
       />
       {settings && (
         <Settings

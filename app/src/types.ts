@@ -363,3 +363,22 @@ export type Readiness = {
 };
 
 export type InboxSync = { polled: number; synced: number; failed: number; errors: string[] };
+
+/** An open PR found by Browse (not necessarily stored locally). */
+export type BrowsePr = {
+  nodeId: string;
+  repo: string;
+  number: number;
+  title: string;
+  url: string;
+  author: string | null;
+  updatedAt: string;
+  isDraft: boolean;
+  isPrivate: boolean;
+  localId: number | null;
+  offline: boolean;
+};
+
+export type BrowseScope = { login: string; orgs: string[]; sharedRepos: number; custom: boolean };
+
+export type BrowsePage = { prs: BrowsePr[]; total: number; scope: BrowseScope; cursor: string | null };

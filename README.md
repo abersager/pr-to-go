@@ -16,6 +16,10 @@ and verdicts wait in an outbox until you're back online.
   from me". It checks them every 15 minutes while you're online. **Sync all**
   packs every PR in it for offline use and shows what's ready. You can also
   add any PR by URL.
+- **Browse** lists every open PR you can reach, newest first: your own
+  repositories, your organizations and repositories shared with you. It
+  takes GitHub search filters such as `author:bob` or `repo:acme/api`. Pick
+  one to take it offline; nothing else is downloaded.
 - **Sync** fetches everything a review needs:
   - PR metadata and the description, with its images;
   - GitHub's per-file patches;

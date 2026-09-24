@@ -990,6 +990,7 @@ As of 2026-09-23. Everything in the §13 plan is built, except the items under
 | GitHub client | `crates/core/src/github` | Errors are classified per §9/§10. Rate limits are tracked per budget, with an outbox reserve. Requests are logged without headers or bodies. |
 | Sync | `sync.rs` | §9.2 steps 1–8. Discussion is fetched in parallel, and blob batches four at a time. |
 | Inbox | `inbox.rs` | Repo and search subscriptions, index polling, deep sync (3 at a time, drafts first), readiness, GC. |
+| Browse | `browse.rs` | Open PRs across the viewer's repositories, organizations and shared repositories, by GitHub search (`user:`/`org:`/`repo:` qualifiers, which GitHub ORs, packed into 256-character queries). Online only; nothing is stored until a PR is picked. |
 | CI checks | `checks.rs` | Re-polls pending checks: 30 s doubling to 5 min, 20 polls per head. |
 | Drafting | `drafts.rs` | §2 validation rules, anchor snapshots. |
 | Outbox | `outbox.rs` | §10 state machine and protocol, reconciliation, crash points for tests. |
@@ -1000,12 +1001,12 @@ As of 2026-09-23. Everything in the §13 plan is built, except the items under
 
 **Tests.**
 
-- Rust: 87 tests. They are unit tests plus integration tests against the fake
-  GitHub: sync, drafts, outbox (the §12 scenarios), remap, inbox, checks and
-  auth. The outbox tests include a crash at every step boundary and a timeout
-  after commit.
+- Rust: 92 tests. They are unit tests plus integration tests against the fake
+  GitHub: sync, drafts, outbox (the §12 scenarios), remap, inbox, checks,
+  auth and browse. The outbox tests include a crash at every step boundary
+  and a timeout after commit.
 - UI: 19 Vitest tests.
-- End to end: 8 Playwright tests, running the real UI and core against the
+- End to end: 10 Playwright tests, running the real UI and core against the
   fake. One of them is a large-PR performance check.
 - All GraphQL documents are validated against GitHub's published schema.
 - One read-only live test syncs public PRs from real GitHub. It's ignored
